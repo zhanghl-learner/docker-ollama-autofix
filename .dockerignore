@@ -1,0 +1,10 @@
+.autofix
+.git
+.pytest_cache
+.venv
+**/__pycache__
+**/*.pyc
+build
+dist
+*.egg-info
+

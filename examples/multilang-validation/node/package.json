@@ -1,0 +1,7 @@
+{
+  "name": "autofix-node-validation",
+  "private": true,
+  "scripts": {
+    "test": "node test_calculator.js"
+  }
+}

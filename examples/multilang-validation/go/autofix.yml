@@ -1,0 +1,7 @@
+version: 1
+build:
+  system: go
+  command: go test ./...
+runtime:
+  ollama_model: qwen3:0.6b
+  offline: true

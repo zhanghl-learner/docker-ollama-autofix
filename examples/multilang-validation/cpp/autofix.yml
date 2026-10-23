@@ -1,0 +1,10 @@
+version: 1
+build:
+  system: cmake
+  commands:
+    - cmake -S . -B build
+    - cmake --build build --config Release
+    - build/Release/calculator_test.exe
+runtime:
+  ollama_model: qwen3:0.6b
+  offline: true

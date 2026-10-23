@@ -1,0 +1,9 @@
+version: 1
+build:
+  system: maven
+  commands:
+    - javac -d out src/Calculator.java src/CalculatorTest.java
+    - java -cp out CalculatorTest
+runtime:
+  ollama_model: qwen3:0.6b
+  offline: true
