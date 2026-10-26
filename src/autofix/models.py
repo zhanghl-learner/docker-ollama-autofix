@@ -1,3 +1,5 @@
+"""Immutable data models shared by detection, execution, and reporting."""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -13,6 +15,8 @@ class BuildStep:
     argv: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable representation of the command."""
+
         return {"label": self.label, "argv": list(self.argv)}
 
 
@@ -27,6 +31,8 @@ class ProjectMatch:
     confidence: str = "high"
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the detected system and its ordered build steps."""
+
         data = asdict(self)
         data["steps"] = [step.to_dict() for step in self.steps]
         return data
@@ -41,6 +47,8 @@ class ProjectInspection:
 
     @property
     def selected(self) -> ProjectMatch | None:
+        """Return the highest-priority match, if detection found one."""
+
         return self.matches[0] if self.matches else None
 
     def select(self, build_system: str | None) -> "ProjectInspection":
@@ -64,6 +72,8 @@ class ProjectInspection:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the selected match together with every candidate."""
+
         return {
             "root": str(self.root),
             "selected": self.selected.to_dict() if self.selected else None,

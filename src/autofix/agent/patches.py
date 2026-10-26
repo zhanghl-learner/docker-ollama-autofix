@@ -1,3 +1,5 @@
+"""Validate, normalize, apply, and restore model-proposed source edits."""
+
 from __future__ import annotations
 
 import ast
@@ -11,6 +13,8 @@ from autofix.agent.textio import read_utf8_exact, write_utf8_exact
 
 
 class UnsafePatchError(ValueError):
+    """Raised when a proposal crosses a source-edit safety boundary."""
+
     pass
 
 
@@ -102,14 +106,9 @@ def _validate_preservation(
         raise UnsafePatchError(
             f"Destructive replacement rejected for {path.name}: removes more than half of the non-empty lines"
         )
-
-
-def _preserve_newline_style(original: str, proposed: str) -> str:
-    """Normalize model text to the source file's existing newline convention."""
-
-    newline = "\r\n" if "\r\n" in original else "\n"
-    normalized = proposed.replace("\r\n", "\n").replace("\r", "\n")
-    return normalized.replace("\n", newline)
+    # A passing test is not enough to justify silently deleting public Python
+    # entry points. Compare only top-level definitions so nested refactors do
+    # not create false positives.
     if path.suffix.lower() != ".py":
         return
     try:
@@ -127,8 +126,18 @@ def _preserve_newline_style(original: str, proposed: str) -> str:
         )
 
 
+def _preserve_newline_style(original: str, proposed: str) -> str:
+    """Normalize model text to the source file's existing newline convention."""
+
+    newline = "\r\n" if "\r\n" in original else "\n"
+    normalized = proposed.replace("\r\n", "\n").replace("\r", "\n")
+    return normalized.replace("\n", newline)
+
+
 @dataclass(frozen=True)
 class ValidatedChange:
+    """A safe, fully materialized file replacement derived from bounded edits."""
+
     path: Path
     relative_path: str
     original: str
@@ -137,6 +146,8 @@ class ValidatedChange:
 
     @property
     def diff(self) -> str:
+        """Render the reviewable unified diff for this file."""
+
         return "".join(
             difflib.unified_diff(
                 self.original.splitlines(keepends=True),
@@ -156,6 +167,13 @@ def _validate_line_edits(
     allow_test_changes: bool,
     allow_destructive_changes: bool,
 ) -> tuple[ValidatedChange, ...]:
+    """Materialize exact, non-overlapping splices against original file text.
+
+    Coordinates always refer to the original file. Edits are therefore checked
+    for overlap first and applied from bottom to top so earlier replacements do
+    not shift the line numbers of later ones.
+    """
+
     grouped: dict[str, list[FileEdit]] = {}
     for edit in edits:
         grouped.setdefault(edit.path, []).append(edit)
@@ -395,6 +413,8 @@ def validate_changes(
     allow_test_changes: bool = False,
     allow_destructive_changes: bool = False,
 ) -> tuple[ValidatedChange, ...]:
+    """Validate a proposal and return only project-contained safe changes."""
+
     root = root.resolve()
     if proposal.edits and proposal.changes:
         raise UnsafePatchError("A proposal cannot mix line edits and full-file changes")
@@ -460,11 +480,15 @@ def validate_changes(
 
 
 def apply_changes(changes: tuple[ValidatedChange, ...]) -> None:
+    """Write validated replacements while preserving exact newline bytes."""
+
     for change in changes:
         write_utf8_exact(change.path, change.replacement)
 
 
 def restore_files(backups: dict[Path, bytes]) -> None:
+    """Restore byte-for-byte backups after a failed direct-mode attempt."""
+
     for path, content in backups.items():
         path.write_bytes(content)
 

@@ -1,3 +1,5 @@
+"""Orchestrate build diagnosis, model retries, isolation, and verified commit."""
+
 from __future__ import annotations
 
 import hashlib
@@ -46,6 +48,8 @@ def _workspace_ignore(directory: str, names: list[str]) -> set[str]:
 
 
 class RepairClient(Protocol):
+    """Protocol implemented by any backend that can propose bounded edits."""
+
     def propose(
         self,
         *,
@@ -54,11 +58,16 @@ class RepairClient(Protocol):
         files: dict[str, str],
         previous_attempt: str | None = None,
         allow_test_changes: bool = False,
-    ) -> RepairProposal: ...
+    ) -> RepairProposal:
+        """Return one bounded proposal for the supplied failure context."""
+
+        ...
 
 
 @dataclass(frozen=True)
 class RepairResult:
+    """Complete repair outcome used by the CLI and persistent audit report."""
+
     initial_build: BuildResult
     final_build: BuildResult
     proposals: tuple[RepairProposal, ...]
@@ -71,9 +80,13 @@ class RepairResult:
 
     @property
     def succeeded(self) -> bool:
+        """Return the final build verdict."""
+
         return self.final_build.succeeded
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize audit data without duplicating full proposal contents."""
+
         return {
             "version": 1,
             "type": "repair",
@@ -130,11 +143,15 @@ class RepairResult:
 
 @dataclass(frozen=True)
 class ProposalRejection:
+    """Static validation failure returned to the model as retry feedback."""
+
     attempt: int
     summary: str
     reason: str
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize a rejected attempt for the repair report."""
+
         return {"attempt": self.attempt, "summary": self.summary, "reason": self.reason}
 
 
@@ -167,7 +184,12 @@ def repair_project(
     save_report: bool = True,
     build_runner: Callable[..., BuildResult] = run_build,
 ) -> RepairResult:
-    """Build, request bounded repairs, validate them, and rebuild."""
+    """Build, request bounded repairs, validate, rebuild, and optionally commit.
+
+    Preview and isolated apply operations mutate only a temporary workspace.
+    Original files are written only after the complete build matrix succeeds and
+    a byte-level concurrency check confirms they have not changed meanwhile.
+    """
 
     root = root.resolve()
     initial = build_runner(root, steps, timeout_seconds=timeout_seconds)
@@ -205,6 +227,8 @@ def repair_project(
         shutil.copytree(root, work_root, ignore=_workspace_ignore)
 
     def cleanup() -> None:
+        """Release the disposable workspace after every exit path."""
+
         if temporary is not None:
             temporary.cleanup()
 
@@ -215,6 +239,8 @@ def repair_project(
         error: str | None = None,
         result_changes: tuple[ValidatedChange, ...] | None = None,
     ) -> RepairResult:
+        """Assemble and optionally persist the current repair outcome."""
+
         result = RepairResult(
             initial,
             current,

@@ -20,7 +20,7 @@ runner = CliRunner()
 def test_version() -> None:
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert "autofix 0.15.0" in result.stdout
+    assert "autofix 0.16.0" in result.stdout
 
 
 def test_configure_saves_user_defaults_for_new_projects(tmp_path: Path) -> None:

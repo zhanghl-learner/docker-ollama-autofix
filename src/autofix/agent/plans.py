@@ -1,3 +1,5 @@
+"""Persist and load hash-bound, policy-bound deterministic repair plans."""
+
 from __future__ import annotations
 
 import hashlib
@@ -15,11 +17,15 @@ from autofix.models import BuildStep
 
 
 class PlanError(ValueError):
+    """Raised when a plan is stale, malformed, or violates its bound policy."""
+
     pass
 
 
 @dataclass(frozen=True)
 class PlannedChange:
+    """Verified replacement content bound to the original file hash."""
+
     path: str
     original_sha256: str
     content: str
@@ -28,6 +34,8 @@ class PlannedChange:
 
 @dataclass(frozen=True)
 class RepairPlan:
+    """A reviewed repair plus the exact policy used to verify it."""
+
     path: Path
     created_at: str
     model: str
@@ -40,6 +48,8 @@ class RepairPlan:
     docker_config: DockerConfig | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the plan while preserving v1/v2 compatibility."""
+
         data: dict[str, Any] = {
             "format": "autofix-repair-plan",
             "version": self.version,
@@ -61,6 +71,8 @@ class RepairPlan:
         return data
 
     def to_proposal(self) -> RepairProposal:
+        """Adapt reviewed content to the common repair verification pipeline."""
+
         return RepairProposal(
             self.summary,
             tuple(
@@ -85,6 +97,8 @@ def save_repair_plan(
     verification_timeout_seconds: float = 300,
     docker_config: DockerConfig | None = None,
 ) -> Path:
+    """Write a deterministic plan for changes that already passed verification."""
+
     project_root = Path(root).expanduser().resolve()
     if not changes:
         raise PlanError("Cannot save an empty repair plan")
@@ -152,6 +166,8 @@ def load_repair_plan(
     allow_test_changes: bool = False,
     allow_destructive_changes: bool = False,
 ) -> tuple[RepairPlan, tuple[ValidatedChange, ...]]:
+    """Load a plan, revalidate its changes, and reject stale source hashes."""
+
     plan_path = Path(path).expanduser().resolve()
     project_root = Path(root).expanduser().resolve()
     try:

@@ -1,3 +1,5 @@
+"""Check whether a project can be repaired without network access."""
+
 from __future__ import annotations
 
 import subprocess
@@ -14,26 +16,36 @@ from autofix.runtime.tools import find_executable
 
 @dataclass(frozen=True)
 class ReadinessCheck:
+    """One named offline prerequisite and its actionable status."""
+
     name: str
     ready: bool
     required: bool
     details: str
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the check for JSON CLI output."""
+
         return asdict(self)
 
 
 @dataclass(frozen=True)
 class OfflineReadinessReport:
+    """Aggregate build, Docker, dependency, and Ollama readiness checks."""
+
     root: Path
     config_path: Path | None
     checks: tuple[ReadinessCheck, ...]
 
     @property
     def ready(self) -> bool:
+        """Return true only when every prerequisite is ready."""
+
         return all(check.ready for check in self.checks if check.required)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the report and its aggregate readiness flag."""
+
         return {
             "root": str(self.root),
             "config_path": str(self.config_path) if self.config_path else None,
@@ -101,6 +113,8 @@ def check_offline_readiness(
     build_system: str | None = None,
     ollama_url: str = "http://127.0.0.1:11434",
 ) -> OfflineReadinessReport:
+    """Evaluate all prerequisites required for offline project repair."""
+
     project_root = Path(root).expanduser().resolve()
     config: AutoFixConfig | None = load_config(project_root)
     selected_image = image or (config.docker_image if config else None)

@@ -1,3 +1,5 @@
+"""Classify high-confidence environment failures before model invocation."""
+
 from __future__ import annotations
 
 import json
@@ -8,6 +10,8 @@ from autofix.builders import BuildResult
 
 
 class RepairEnvironmentError(RuntimeError):
+    """Raised when source edits cannot repair the selected runtime."""
+
     pass
 
 
@@ -110,7 +114,11 @@ def _declared_node_dependency(root: Path, request: str) -> str | None:
 
 
 def environment_failure(build: BuildResult) -> str | None:
-    """Return an actionable runtime/dependency diagnosis, if confidently known."""
+    """Return an actionable diagnosis only for high-confidence runtime failures.
+
+    Only failed steps are inspected. Ambiguous compiler and source errors return
+    ``None`` so they remain eligible for the ordinary repair loop.
+    """
 
     missing_executable = next((step for step in build.steps if step.exit_code == 127), None)
     if missing_executable:

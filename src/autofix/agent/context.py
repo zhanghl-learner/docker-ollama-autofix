@@ -1,3 +1,5 @@
+"""Select bounded project context and format failures for the repair model."""
+
 from __future__ import annotations
 
 import re
@@ -73,6 +75,8 @@ def _inside(root: Path, path: Path) -> bool:
 
 
 def _referenced_paths(root: Path, output: str) -> list[Path]:
+    """Extract only existing, project-contained source paths from build output."""
+
     candidates: list[Path] = []
     pattern = re.compile(r"(?P<path>[A-Za-z0-9_. /\\-]+\.[A-Za-z0-9]+)(?::\d+)?")
     for match in pattern.finditer(output):
@@ -94,7 +98,11 @@ def collect_source_context(
     max_file_chars: int = 16_000,
     max_total_chars: int = 60_000,
 ) -> dict[str, str]:
-    """Collect referenced files first, then small project sources within limits."""
+    """Collect referenced files first, then small project sources within limits.
+
+    Generated directories and symlinks are excluded so context stays inside the
+    reviewed project tree and does not accidentally include dependency caches.
+    """
 
     output = "\n".join(f"{step.stdout}\n{step.stderr}" for step in build.steps)
     ordered = _referenced_paths(root, output)
@@ -133,6 +141,8 @@ def collect_source_context(
 
 
 def format_failure(build: BuildResult, max_chars: int = 24_000) -> str:
+    """Render executed-step diagnostics and keep the most recent output."""
+
     chunks: list[str] = []
     for step in build.steps:
         chunks.append(

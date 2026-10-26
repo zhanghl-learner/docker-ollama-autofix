@@ -1,3 +1,5 @@
+"""Public repair-agent API exposed to the command-line layer."""
+
 from autofix.agent.ollama import FileChange, FileEdit, OllamaClient, OllamaError, RepairProposal
 from autofix.agent.diagnostics import RepairEnvironmentError, environment_failure
 from autofix.agent.plans import PlanError, RepairPlan, load_repair_plan, save_repair_plan

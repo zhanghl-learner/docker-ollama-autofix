@@ -1,3 +1,5 @@
+"""Typer command-line interface for inspection, repair, audit, and bundles."""
+
 from __future__ import annotations
 
 import json
@@ -829,10 +831,16 @@ def apply_plan(
             assert docker_runtime_config is not None
 
             def build_runner(root: Path, build_steps: tuple, **kwargs: object):  # type: ignore[no-redef]
+                """Execute plan-bound steps with the plan-bound Docker policy."""
+
                 return run_build_docker(root, build_steps, config=docker_runtime_config, **kwargs)
 
         class PlanClient:
+            """Replay reviewed plan content without a second model request."""
+
             def propose(self, **_: object):
+                """Return the immutable proposal embedded in the plan."""
+
                 return plan.to_proposal()
 
         result = repair_project(
@@ -942,6 +950,8 @@ def repair(
             plan_docker_config = docker_runtime_config
 
             def build_runner(root: Path, build_steps: tuple, **kwargs: object):  # type: ignore[no-redef]
+                """Execute repair attempts with the selected Docker policy."""
+
                 return run_build_docker(root, build_steps, config=docker_runtime_config, **kwargs)
 
         selected_model = model or (config.ollama_model if config else None)

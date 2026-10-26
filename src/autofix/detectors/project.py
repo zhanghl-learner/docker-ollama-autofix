@@ -1,3 +1,5 @@
+"""Detect supported project types and derive safe default build plans."""
+
 from __future__ import annotations
 
 import ast
@@ -13,6 +15,8 @@ def _step(label: str, *argv: str) -> BuildStep:
 
 
 def _has_top_level_runtime(path: Path) -> bool:
+    """Detect whether a Python module performs work when executed directly."""
+
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     except (OSError, UnicodeDecodeError, SyntaxError):
@@ -30,6 +34,8 @@ def _has_top_level_runtime(path: Path) -> bool:
 
 
 def _python_entrypoint(root: Path) -> Path | None:
+    """Choose an unambiguous executable Python entry point when possible."""
+
     sources = [
         path
         for path in sorted(root.glob("*.py"))
@@ -139,6 +145,8 @@ def _simple_match(
 
 
 def inspect_project(path: Path | str) -> ProjectInspection:
+    """Inspect a project root and return every supported build-system match."""
+
     """Detect supported build systems in priority order."""
 
     root = Path(path).expanduser().resolve()

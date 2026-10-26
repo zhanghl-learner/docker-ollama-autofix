@@ -95,6 +95,21 @@ def test_rejects_destructive_non_import_replacement(tmp_path: Path) -> None:
         validate_changes(tmp_path, proposal)
 
 
+def test_rejects_removal_of_python_top_level_definition(tmp_path: Path) -> None:
+    source = tmp_path / "service.py"
+    source.write_text(
+        "def public_api():\n    return 1\n\nvalue = 1\nother = 2\n",
+        encoding="utf-8",
+    )
+    proposal = RepairProposal(
+        "remove API",
+        (FileChange("service.py", "value = 1\nother = 2\n", "delete function"),),
+    )
+
+    with pytest.raises(UnsafePatchError, match="removes top-level definitions: public_api"):
+        validate_changes(tmp_path, proposal)
+
+
 def test_destructive_change_requires_explicit_override(tmp_path: Path) -> None:
     source = tmp_path / "model.py"
     source.write_text("class Model:\n    pass\n", encoding="utf-8")

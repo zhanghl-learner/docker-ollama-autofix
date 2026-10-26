@@ -1,3 +1,5 @@
+"""Load, validate, merge, and create AutoFix YAML configuration files."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,11 +11,15 @@ import yaml
 
 
 class ConfigError(ValueError):
+    """Raised when configuration is malformed or internally inconsistent."""
+
     pass
 
 
 @dataclass(frozen=True)
 class AutoFixConfig:
+    """Validated effective configuration after global/project merging."""
+
     path: Path
     version: int
     command: str | None
@@ -26,6 +32,8 @@ class AutoFixConfig:
 
 
 def global_config_path() -> Path:
+    """Return the user-level settings path, honoring ``AUTOFIX_HOME``."""
+
     configured_home = os.environ.get("AUTOFIX_HOME")
     base = Path(configured_home).expanduser() if configured_home else Path.home() / ".autofix"
     return base / "settings.yml"
@@ -48,6 +56,8 @@ def save_global_config(
     offline: bool = True,
     dependencies_bundled: bool = True,
 ) -> Path:
+    """Validate and persist defaults inherited by every project."""
+
     if not docker_image.strip() or not ollama_model.strip():
         raise ConfigError("docker_image and ollama_model must be non-empty")
     path = global_config_path()
@@ -80,6 +90,8 @@ def create_config(
     offline: bool = True,
     dependencies_bundled: bool = False,
 ) -> Path:
+    """Create a project configuration without overwriting existing settings."""
+
     project_root = Path(root).expanduser().resolve()
     path = project_root / "autofix.yml"
     if path.exists() or (project_root / ".autofix.yml").exists():
@@ -119,6 +131,8 @@ def create_config(
 
 
 def load_config(root: Path | str, *, global_only: bool = False) -> AutoFixConfig | None:
+    """Merge global and project settings into one validated configuration."""
+
     project_root = Path(root).expanduser().resolve()
     project_paths = (project_root / "autofix.yml", project_root / ".autofix.yml")
     project_path = None if global_only else next(
@@ -168,6 +182,8 @@ def load_config(root: Path | str, *, global_only: bool = False) -> AutoFixConfig
         raise ConfigError(f"Unsupported or invalid configuration: {path}")
 
     def optional_string(mapping: dict[str, Any], key: str) -> str | None:
+        """Normalize an optional non-empty scalar from a config section."""
+
         value = mapping.get(key)
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ConfigError(f"{key} must be a non-empty string")

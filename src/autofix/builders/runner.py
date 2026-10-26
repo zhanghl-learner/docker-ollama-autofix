@@ -1,3 +1,5 @@
+"""Execute ordered build steps without a shell and capture audit results."""
+
 from __future__ import annotations
 
 import json
@@ -17,6 +19,8 @@ from autofix.models import BuildStep
 
 @dataclass(frozen=True)
 class StepResult:
+    """Captured outcome of one command in an ordered build matrix."""
+
     label: str
     argv: tuple[str, ...]
     exit_code: int
@@ -27,9 +31,13 @@ class StepResult:
 
     @property
     def succeeded(self) -> bool:
+        """Return true for a zero exit code that did not time out."""
+
         return self.exit_code == 0 and not self.timed_out
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-safe step result for audit reports."""
+
         data = asdict(self)
         data["argv"] = list(self.argv)
         data["succeeded"] = self.succeeded
@@ -38,6 +46,8 @@ class StepResult:
 
 @dataclass(frozen=True)
 class BuildResult:
+    """Outcome of the steps executed before success or the first failure."""
+
     root: Path
     steps: tuple[StepResult, ...]
     started_at: str
@@ -45,15 +55,21 @@ class BuildResult:
 
     @property
     def succeeded(self) -> bool:
+        """Return true only when at least one step ran and every step passed."""
+
         return bool(self.steps) and all(step.succeeded for step in self.steps)
 
     @property
     def exit_code(self) -> int:
+        """Expose a stable aggregate exit code for CLI propagation."""
+
         if self.succeeded:
             return 0
         return self.steps[-1].exit_code if self.steps else 2
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the build and all executed steps for reporting."""
+
         return {
             "root": str(self.root),
             "started_at": self.started_at,
@@ -65,6 +81,8 @@ class BuildResult:
 
 
 def parse_command(command: str) -> BuildStep:
+    """Parse a user command into argv without enabling shell evaluation."""
+
     # Parse quoting consistently on every platform. In particular, posix=False
     # preserves the quote characters around `python -c "..."`, which changes
     # the meaning of the Python program instead of merely grouping the argument.

@@ -1,3 +1,5 @@
+"""Undo verified repairs by reversing recorded diffs with exact matching."""
+
 from __future__ import annotations
 
 import json
@@ -11,11 +13,15 @@ from autofix.agent.textio import read_utf8_exact, write_utf8_exact
 
 
 class RollbackError(ValueError):
+    """Raised when a report is invalid or current files no longer match it."""
+
     pass
 
 
 @dataclass(frozen=True)
 class RollbackResult:
+    """Paths produced by one successful, backed-up rollback operation."""
+
     report_path: Path
     restored_paths: tuple[Path, ...]
     backup_dir: Path
@@ -78,6 +84,8 @@ def _reverse_unified_diff(current: str, diff: str, *, label: str) -> str:
 
 
 def _safe_project_file(root: Path, raw_path: Any) -> tuple[Path, Path]:
+    """Resolve a report path without permitting traversal or symlink escape."""
+
     if not isinstance(raw_path, str) or not raw_path:
         raise RollbackError("Repair report contains an invalid file path")
     relative = Path(raw_path.replace("\\", "/"))
@@ -97,6 +105,8 @@ def _safe_project_file(root: Path, raw_path: Any) -> tuple[Path, Path]:
 
 
 def rolled_back_reports(root: Path | str) -> set[Path]:
+    """Return repair reports already referenced by rollback receipts."""
+
     project_root = Path(root).expanduser().resolve()
     receipt_dir = project_root / ".autofix" / "rollbacks"
     reports: set[Path] = set()
@@ -114,6 +124,8 @@ def rolled_back_reports(root: Path | str) -> set[Path]:
 
 
 def latest_rollback_candidate(root: Path | str) -> Path:
+    """Find the newest successful applied repair that has not been undone."""
+
     project_root = Path(root).expanduser().resolve()
     report_dir = project_root / ".autofix" / "repairs"
     already_rolled_back = rolled_back_reports(project_root)

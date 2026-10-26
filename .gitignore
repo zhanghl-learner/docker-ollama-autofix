@@ -2,10 +2,12 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.gradle/
 .coverage
 htmlcov/
 dist/
 build/
 *.egg-info/
 .autofix/
+.vscode/
 

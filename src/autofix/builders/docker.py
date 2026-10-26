@@ -1,3 +1,5 @@
+"""Run build matrices in disposable, resource-constrained Docker containers."""
+
 from __future__ import annotations
 
 import math
@@ -41,11 +43,15 @@ DEFAULT_IMAGES = {
 
 
 class DockerConfigurationError(ValueError):
+    """Raised when Docker is unavailable or a container policy is unsafe."""
+
     pass
 
 
 @dataclass(frozen=True)
 class DockerConfig:
+    """Validated container image, resource limits, and network policy."""
+
     image: str
     cpus: float = 2.0
     memory: str = "2g"
@@ -53,6 +59,8 @@ class DockerConfig:
     allow_network: bool = False
 
     def __post_init__(self) -> None:
+        """Reject malformed values before they can reach ``docker run``."""
+
         if not isinstance(self.image, str) or not IMAGE_PATTERN.fullmatch(self.image):
             raise DockerConfigurationError(f"Invalid Docker image reference: {self.image}")
         if (
@@ -75,10 +83,14 @@ class DockerConfig:
 
 
 def default_image(match: ProjectMatch | None) -> str | None:
+    """Return the conventional image for a detected build system."""
+
     return DEFAULT_IMAGES.get(match.build_system) if match else None
 
 
 def build_docker_step(source: Path, step: BuildStep, config: DockerConfig) -> BuildStep:
+    """Wrap one project command in a hardened ``docker run`` invocation."""
+
     source = source.resolve()
     if "," in str(source):
         raise DockerConfigurationError("Docker mount source paths containing commas are unsupported")

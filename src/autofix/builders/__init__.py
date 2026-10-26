@@ -1,3 +1,5 @@
+"""Build execution primitives for local processes and Docker containers."""
+
 from autofix.builders.docker import (
     DockerConfig,
     DockerConfigurationError,

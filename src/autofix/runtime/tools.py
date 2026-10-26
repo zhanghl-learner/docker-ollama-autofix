@@ -1,3 +1,5 @@
+"""Locate executables through PATH and known Windows installation folders."""
+
 from __future__ import annotations
 
 import os
@@ -27,6 +29,8 @@ def _windows_candidates(name: str) -> tuple[Path, ...]:
 
 
 def find_executable(name: str) -> str | None:
+    """Return an executable path, including Windows fallback locations."""
+
     """Resolve a tool from PATH or common per-user Windows install locations."""
 
     found = shutil.which(name)

@@ -1,3 +1,5 @@
+"""Inspect local tools, Docker, and the Ollama service for CLI diagnostics."""
+
 from __future__ import annotations
 
 import platform
@@ -35,6 +37,8 @@ def _ollama_service(base_url: str) -> dict[str, Any]:
 
 
 def check_environment(ollama_url: str = "http://127.0.0.1:11434") -> dict[str, Any]:
+    """Return readiness details for every runtime component AutoFix can use."""
+
     return {
         "platform": platform.platform(),
         "python": _tool("python"),

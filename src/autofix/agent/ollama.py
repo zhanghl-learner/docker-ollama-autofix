@@ -1,3 +1,5 @@
+"""Exchange schema-constrained repair proposals with a local Ollama server."""
+
 from __future__ import annotations
 
 import json
@@ -41,6 +43,8 @@ REPAIR_SCHEMA: dict[str, Any] = {
 
 @dataclass(frozen=True)
 class FileChange:
+    """Legacy full-file replacement retained for plan compatibility."""
+
     path: str
     content: str
     reason: str
@@ -48,6 +52,8 @@ class FileChange:
 
 @dataclass(frozen=True)
 class FileEdit:
+    """One bounded line splice proposed against an existing source file."""
+
     path: str
     start_line: int
     delete_lines: int
@@ -58,12 +64,16 @@ class FileEdit:
 
 @dataclass(frozen=True)
 class RepairProposal:
+    """Model summary plus legacy replacements or preferred line edits."""
+
     summary: str
     changes: tuple[FileChange, ...] = ()
     edits: tuple[FileEdit, ...] = ()
 
 
 class OllamaError(RuntimeError):
+    """Raised when Ollama is unavailable or violates the response contract."""
+
     pass
 
 
@@ -79,11 +89,15 @@ def _is_test_path(path: str) -> bool:
 
 
 class OllamaClient:
+    """Minimal client for model discovery and deterministic repair requests."""
+
     def __init__(self, base_url: str = "http://127.0.0.1:11434", timeout: float = 180) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
     def list_models(self) -> list[str]:
+        """Return locally installed Ollama model names."""
+
         try:
             response = httpx.get(f"{self.base_url}/api/tags", timeout=5)
             response.raise_for_status()
@@ -100,6 +114,8 @@ class OllamaClient:
         previous_attempt: str | None = None,
         allow_test_changes: bool = False,
     ) -> RepairProposal:
+        """Request minimal edits using a path-restricted dynamic JSON schema."""
+
         editable_paths = [
             path for path in files if allow_test_changes or not _is_test_path(path)
         ]
@@ -185,6 +201,8 @@ PROJECT FILES:
 
 
 def validate_proposal(data: object) -> RepairProposal:
+    """Convert untrusted model JSON into a strictly validated proposal."""
+
     if not isinstance(data, dict) or not isinstance(data.get("summary"), str):
         raise OllamaError("Repair proposal must contain a string summary")
     raw_edits = data.get("edits")

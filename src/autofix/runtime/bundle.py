@@ -1,3 +1,5 @@
+"""Create, verify, and install tamper-evident offline runtime bundles."""
+
 from __future__ import annotations
 
 import hashlib
@@ -16,11 +18,15 @@ from autofix.runtime.tools import find_executable
 
 
 class BundleError(RuntimeError):
+    """Raised when bundle creation, validation, or installation fails."""
+
     pass
 
 
 @dataclass(frozen=True)
 class BundleFile:
+    """Manifest entry binding a relative payload path to size and SHA-256."""
+
     path: str
     size: int
     sha256: str
@@ -28,6 +34,8 @@ class BundleFile:
 
 @dataclass(frozen=True)
 class BundleReport:
+    """Verified bundle metadata returned by create, verify, and install."""
+
     path: Path
     docker_image: str
     ollama_model: str
@@ -35,9 +43,13 @@ class BundleReport:
 
     @property
     def total_size(self) -> int:
+        """Return the total number of bytes covered by the manifest."""
+
         return sum(item.size for item in self.files)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize bundle metadata for CLI output."""
+
         return {
             "path": str(self.path),
             "docker_image": self.docker_image,
@@ -80,6 +92,8 @@ def _record(root: Path, relative: str) -> BundleFile:
 
 
 def _safe_member(root: Path, relative: object) -> Path:
+    """Resolve a manifest member while rejecting traversal and absolute paths."""
+
     if not isinstance(relative, str) or not relative or "\\" in relative:
         raise BundleError("Bundle manifest contains an invalid path")
     member = Path(relative)
@@ -96,6 +110,8 @@ def _safe_member(root: Path, relative: object) -> Path:
 
 
 def _model_definition(ollama: str, model: str) -> tuple[str, Path]:
+    """Build a portable Modelfile and locate its referenced local GGUF blob."""
+
     modelfile = _run([ollama, "show", "--modelfile", model], timeout=30)
     match = re.search(r"(?m)^FROM\s+(.+?)\s*$", modelfile)
     if not match:
@@ -184,6 +200,8 @@ def create_bundle(
     project_root: Path | str | None = None,
     include_cli: bool = True,
 ) -> BundleReport:
+    """Stage an offline runtime and publish it only after full verification."""
+
     destination = Path(output).expanduser().resolve()
     config = Path(config_path).expanduser().resolve()
     if destination.exists():
@@ -273,6 +291,8 @@ def create_bundle(
 
 
 def verify_bundle(bundle: Path | str) -> BundleReport:
+    """Validate manifest schema, paths, sizes, hashes, and extra files."""
+
     root = Path(bundle).expanduser().resolve()
     manifest_path = root / "bundle-manifest.json"
     try:
@@ -323,6 +343,8 @@ def verify_bundle(bundle: Path | str) -> BundleReport:
 
 
 def install_bundle(bundle: Path | str) -> BundleReport:
+    """Verify a bundle before importing its Docker image and Ollama model."""
+
     report = verify_bundle(bundle)
     docker = find_executable("docker")
     ollama = find_executable("ollama")

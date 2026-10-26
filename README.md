@@ -51,6 +51,8 @@ The model proposes edits but never decides acceptance and never writes directly 
 
 AutoFix selects the first detected build system by default and reports every match. Polyglot repositories can select a different match explicitly; execution is still based on one selected build system per invocation.
 
+The Python source uses English module and public-API docstrings throughout. Comments focus on security invariants, non-obvious algorithms, and design rationale rather than restating individual statements; the user-facing guides remain available in Chinese.
+
 ## Install for development
 
 ```powershell

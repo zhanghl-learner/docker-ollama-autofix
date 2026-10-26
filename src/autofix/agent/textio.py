@@ -1,3 +1,5 @@
+"""Read and write UTF-8 source without platform newline translation."""
+
 from __future__ import annotations
 
 from pathlib import Path
