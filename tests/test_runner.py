@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -59,10 +58,10 @@ def test_resolves_relative_project_executable(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(sys.platform != "win32", reason="exercises Windows CreateProcess")
 def test_runs_relative_project_executable_on_windows(tmp_path: Path) -> None:
-    executable = tmp_path / "tools" / "cmd.exe"
+    executable = tmp_path / "tools" / "check.cmd"
     executable.parent.mkdir()
-    executable.write_bytes(Path(os.environ["COMSPEC"]).read_bytes())
-    step = BuildStep("relative", (str(Path("tools") / "cmd.exe"), "/c", "exit", "0"))
+    executable.write_text("@exit /b 0\n", encoding="ascii")
+    step = BuildStep("relative", (str(Path("tools") / "check.cmd"),))
 
     result = run_build(tmp_path, (step,), save_report=False)
 

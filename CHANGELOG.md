@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- 尚无变更。
+### Fixed
+
+- Windows 相对项目可执行文件集成测试改用临时 `.cmd`，不再复制系统 `cmd.exe`；保留 `shell=False` 的真实执行覆盖，同时兼容 GitHub 托管 Windows runner 的安全策略。
 
 ## 0.19.0 - 2026-10-27
 

@@ -125,6 +125,8 @@ repair 预览以前无论是否使用 Docker，都打印带 `--docker` 的 apply
 
 修复后 Docker 又暴露出相对可执行文件测试与容器策略的冲突：pytest 的 `tmp_path` 位于 `/tmp`，而加固容器有意使用 `noexec` 挂载 `/tmp`。旧测试即使设置执行位也不能直接启动临时 shell 脚本。现在路径解析由不执行文件的跨平台单元测试覆盖，Windows `CreateProcess` 的真实执行由仅限 Windows 的独立测试覆盖；没有为了让测试通过而移除容器的 `noexec` 安全限制。
 
+Windows-only 集成测试使用项目临时目录中的最小 `.cmd` 文件，不复制或改写系统 `cmd.exe`。这既覆盖 `shell=False` 下的相对命令解析，又避免托管 CI 对复制系统二进制的额外安全限制。
+
 最终复验结果为：Windows 本机 162 项通过；Linux Docker 的 compileall 与 pytest 两个步骤均通过，其中 161 项通过、1 项 Windows-only 集成测试按设计跳过。Docker 仍保持只读根文件系统和 `/tmp:rw,noexec,nosuid` 策略。
 
 ## 6. 模型质量观察
