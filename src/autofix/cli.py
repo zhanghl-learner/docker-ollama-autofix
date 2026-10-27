@@ -35,6 +35,11 @@ from autofix.builders import (
     run_build_docker,
 )
 from autofix.detectors import inspect_project
+from autofix.evaluation import (
+    EvaluationError,
+    evaluate_project,
+    load_evaluation_manifest,
+)
 from autofix.models import BuildStep, ProjectInspection
 from autofix.config import (
     AutoFixConfig,
@@ -555,6 +560,155 @@ def history(
             str(item["report"]),
         )
     console.print(table)
+
+
+@app.command()
+def evaluate(
+    path: Path = typer.Argument(
+        Path("."), exists=True, file_okay=False, resolve_path=True
+    ),
+    repair_mode: bool = typer.Option(
+        False,
+        "--repair",
+        help="Ask Ollama for an isolated repair and score its changed-file scope.",
+    ),
+    model: str | None = typer.Option(
+        None, help="Installed Ollama model; defaults to autofix.yml."
+    ),
+    ollama_url: str = typer.Option(
+        "http://127.0.0.1:11434", help="Ollama API base URL."
+    ),
+    max_attempts: int = typer.Option(3, min=1, max=20),
+    timeout: float = typer.Option(300, min=0.1, help="Timeout per verification step."),
+    no_save: bool = typer.Option(False, help="Do not save evaluation or repair reports."),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+    docker: bool = typer.Option(False, "--docker", help="Run verification in Docker."),
+    docker_image: str | None = typer.Option(None, help="Override the configured image."),
+    docker_cpus: float = typer.Option(2.0, min=0.1, max=64),
+    docker_memory: str = typer.Option("2g"),
+    docker_pids: int = typer.Option(256, min=16, max=4096),
+) -> None:
+    """Validate an intentionally failing case and optionally score a repair."""
+
+    try:
+        manifest = load_evaluation_manifest(path)
+        config = _load_config_or_exit(path)
+        inspection = inspect_project(path)
+        build_runner = run_build
+        if docker:
+            docker_config = _docker_config(
+                inspection,
+                docker_image or (config.docker_image if config else None),
+                docker_cpus,
+                docker_memory,
+                docker_pids,
+                False,
+            )
+            _require_docker()
+
+            def build_runner(  # type: ignore[no-redef]
+                root: Path,
+                steps: tuple[BuildStep, ...],
+                *,
+                timeout_seconds: float,
+                save_report: bool = True,
+            ):
+                """Bind the selected Docker limits to the evaluation runner."""
+
+                return run_build_docker(
+                    root,
+                    steps,
+                    config=docker_config,
+                    timeout_seconds=timeout_seconds,
+                    save_report=save_report,
+                )
+
+        selected_model = model or (config.ollama_model if config else None)
+        client = OllamaClient(ollama_url) if repair_mode else None
+        result = evaluate_project(
+            path,
+            manifest,
+            client=client,
+            model=selected_model,
+            max_attempts=max_attempts,
+            timeout_seconds=timeout,
+            build_runner=build_runner,
+            runner_name="docker" if docker else "local",
+            save_report=not no_save,
+        )
+    except (
+        DockerConfigurationError,
+        EvaluationError,
+        OllamaError,
+        RepairEnvironmentError,
+        UnsafePatchError,
+    ) as exc:
+        console.print(f"[red]Evaluation stopped: {exc}[/red]")
+        report = getattr(exc, "report_path", None)
+        if report:
+            console.print(f"Repair report: {report}")
+        raise typer.Exit(code=2) from exc
+
+    if json_output:
+        _json(result.to_dict())
+    else:
+        table = Table(title=f"AutoFix evaluation: {manifest.name}")
+        table.add_column("Metric")
+        table.add_column("Result")
+        table.add_row(
+            "initial failure",
+            "confirmed" if result.initial_failure_confirmed else "not reproduced",
+        )
+        table.add_row(
+            "failure contract",
+            "matched" if result.failure_contract_matched else "mismatched",
+        )
+        if result.failure_contract_mismatches:
+            table.add_row(
+                "failure mismatch",
+                "\n".join(result.failure_contract_mismatches),
+            )
+        if result.repair:
+            table.add_row(
+                "repair build", "passed" if result.repair.succeeded else "failed"
+            )
+            table.add_row("proposals", str(len(result.repair.proposals)))
+            table.add_row(
+                "verification failures",
+                str(len(result.repair.verification_failures)),
+            )
+            table.add_row("changed paths", ", ".join(result.changed_paths) or "none")
+            table.add_row(
+                "unexpected paths",
+                ", ".join(result.unexpected_change_paths) or "none",
+            )
+            table.add_row(
+                "missing required paths",
+                ", ".join(result.missing_required_paths) or "none",
+            )
+        elif repair_mode:
+            table.add_row("repair build", "failed")
+            table.add_row("proposals", str(result.proposal_count))
+            table.add_row("rejections", str(result.rejection_count))
+            table.add_row(
+                "verification failures",
+                str(result.verification_failure_count),
+            )
+            table.add_row("repair error", result.repair_error or "unknown failure")
+            table.add_row(
+                "missing required paths",
+                ", ".join(result.missing_required_paths) or "none",
+            )
+        table.add_row("contract", "passed" if result.passed else "failed")
+        console.print(table)
+        if result.report_path:
+            console.print(f"Evaluation report: {result.report_path}")
+        if not repair_mode and result.passed:
+            console.print(
+                "[green]Baseline is valid. Re-run with --repair to score an isolated model repair.[/green]"
+            )
+    if not result.passed:
+        raise typer.Exit(code=1)
 
 
 @app.command()

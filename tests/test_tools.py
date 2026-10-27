@@ -19,6 +19,6 @@ def test_find_executable_discovers_per_user_docker(monkeypatch, tmp_path: Path) 
     executable.write_bytes(b"")
     monkeypatch.setattr(tools.shutil, "which", lambda _: None)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    monkeypatch.setattr(tools.os, "name", "nt")
+    monkeypatch.setattr(tools, "_is_windows", lambda: True)
 
     assert tools.find_executable("docker") == str(executable)

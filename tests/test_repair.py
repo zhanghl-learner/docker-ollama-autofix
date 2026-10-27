@@ -89,6 +89,13 @@ def test_preview_retries_failed_build_and_returns_only_verified_final_diff(
     assert result.succeeded
     assert not result.applied
     assert len(result.proposals) == 2
+    assert len(result.verification_failures) == 1
+    feedback = str(client.calls[1]["previous_attempt"])
+    assert "passed static validation" in feedback
+    assert "APPLIED DIFF" in feedback
+    assert "-value = 1" in feedback
+    assert "+value = 3" in feedback
+    assert "did not pass verification" in feedback
     assert len(result.changes) == 1
     assert result.changes[0].original.replace("\r\n", "\n") == "value = 1\n"
     assert result.changes[0].replacement.replace("\r\n", "\n") == "value = 2\n"
@@ -105,6 +112,63 @@ def test_preview_returns_no_plan_changes_when_verification_fails(tmp_path: Path)
 
     assert not result.succeeded
     assert result.changes == ()
+    assert len(result.verification_failures) == 1
+    assert result.verification_failures[0].changes[0].relative_path == "value.py"
+    assert source.read_text(encoding="utf-8") == "value = 1\n"
+
+
+def test_exact_duplicate_proposal_is_rejected_with_audit_report(
+    tmp_path: Path,
+) -> None:
+    source, steps = _project(tmp_path)
+    proposal = RepairProposal(
+        "wrong", (FileChange("value.py", "value = 3\n", "guess"),)
+    )
+    client = SequenceClient([proposal, proposal])
+
+    with pytest.raises(UnsafePatchError, match="Duplicate proposal") as caught:
+        repair_project(
+            tmp_path, steps, client, model="test", apply=False, max_attempts=2
+        )
+
+    assert source.read_text(encoding="utf-8") == "value = 1\n"
+    report_path = getattr(caught.value, "report_path", None)
+    assert report_path is not None
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert len(report["verification_failures"]) == 1
+    assert "Duplicate proposal" in report["rejections"][0]["reason"]
+
+
+def test_repair_cycle_is_rejected_before_rebuilding_repeated_state(
+    tmp_path: Path,
+) -> None:
+    source, steps = _project(tmp_path)
+    client = SequenceClient(
+        [
+            RepairProposal(
+                "wrong", (FileChange("value.py", "value = 3\n", "guess"),)
+            ),
+            RepairProposal(
+                "same state",
+                (FileChange("value.py", "value = 3\n", "different explanation"),),
+            ),
+            RepairProposal(
+                "fix", (FileChange("value.py", "value = 2\n", "correct"),)
+            ),
+        ]
+    )
+
+    result = repair_project(
+        tmp_path, steps, client, model="test", apply=False, max_attempts=3
+    )
+
+    assert result.succeeded
+    assert len(result.verification_failures) == 1
+    assert len(result.rejections) == 1
+    assert "Repair cycle detected" in result.rejections[0].reason
+    final_feedback = str(client.calls[2]["previous_attempt"])
+    assert "ATTEMPT 1" in final_feedback
+    assert "previously observed failed source state" in final_feedback
     assert source.read_text(encoding="utf-8") == "value = 1\n"
 
 

@@ -11,6 +11,7 @@ def test_validates_structured_line_edit_proposal() -> None:
     proposal = validate_proposal(
         {
             "summary": "add import",
+            "diagnosis": "main.py line 1 references torch before it is imported",
             "edits": [
                 {
                     "path": "main.py",
@@ -26,6 +27,7 @@ def test_validates_structured_line_edit_proposal() -> None:
     assert proposal.edits == (
         FileEdit("main.py", 1, 0, "", "import torch\n", "torch is referenced"),
     )
+    assert "line 1" in proposal.diagnosis
     assert proposal.changes == ()
 
 
@@ -34,6 +36,7 @@ def test_rejects_invalid_line_coordinates() -> None:
         validate_proposal(
             {
                 "summary": "bad",
+                "diagnosis": "main.py requires an insertion at its first line",
                 "edits": [
                     {
                         "path": "main.py",
@@ -47,6 +50,11 @@ def test_rejects_invalid_line_coordinates() -> None:
         )
 
 
+def test_rejects_proposal_without_diagnosis() -> None:
+    with pytest.raises(OllamaError, match="diagnosis"):
+        validate_proposal({"summary": "guess", "edits": []})
+
+
 def test_model_schema_excludes_protected_test_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
@@ -57,6 +65,7 @@ def test_model_schema_excludes_protected_test_paths(monkeypatch: pytest.MonkeyPa
         def json(self) -> dict[str, object]:
             proposal = {
                 "summary": "fix",
+                "diagnosis": "calculator.py line 1 has the wrong value",
                 "edits": [
                     {
                         "path": "calculator.py",
@@ -86,3 +95,16 @@ def test_model_schema_excludes_protected_test_paths(monkeypatch: pytest.MonkeyPa
     assert path_schema["enum"] == ["calculator.py"]  # type: ignore[index]
     prompt = captured["messages"][1]["content"]  # type: ignore[index]
     assert "READ-ONLY TEST: test_calculator.py" in prompt
+    assert captured["options"] == {"temperature": 0}
+
+    OllamaClient().propose(
+        model="test",
+        failure="assertion failed",
+        files={"calculator.py": "value = 1\n"},
+        previous_attempt="ATTEMPT 1 failed after changing line 1",
+    )
+    retry_prompt = captured["messages"][1]["content"]  # type: ignore[index]
+    assert retry_prompt.rfind("Previous attempt result") > retry_prompt.rfind(
+        "PROJECT FILES"
+    )
+    assert captured["options"] == {"temperature": 0.15}

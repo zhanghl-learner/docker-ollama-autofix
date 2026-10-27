@@ -1,0 +1,24 @@
+version: 1
+name: python-order-service-boundary
+language: Python
+difficulty: intermediate
+commands:
+  - python -m compileall -q src tests
+  - python -m unittest discover -s tests -v
+expected_failure:
+  exit_code: 1
+  failed_step: 2
+  output_contains:
+    - test_bulk_discount_starts_at_ten_units
+    - "AssertionError: 2500 != 2250"
+  output_excludes:
+    - ModuleNotFoundError
+    - No module named
+allowed_change_paths:
+  - src/order_service/pricing.py
+required_change_paths:
+  - src/order_service/pricing.py
+tags:
+  - multi-file
+  - boundary-condition
+  - ordered-build-matrix

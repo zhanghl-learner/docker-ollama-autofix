@@ -1,0 +1,9 @@
+version: 1
+build:
+  system: python
+  commands:
+    - python -m compileall -q src tests
+    - python -m unittest discover -s tests -v
+runtime:
+  ollama_model: qwen3:0.6b
+  offline: true

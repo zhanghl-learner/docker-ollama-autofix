@@ -1,0 +1,8 @@
+{
+  "name": "autofix-node-checkout-example",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "test": "node test/checkout.test.js"
+  }
+}

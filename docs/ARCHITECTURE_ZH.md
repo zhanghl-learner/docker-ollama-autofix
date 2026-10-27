@@ -1,6 +1,6 @@
 # AutoFix 实现原理与代码架构
 
-本文面向维护者和希望审计 AutoFix 行为的使用者，对应版本 0.16.0。它说明系统为什么这样设计、一次修复如何流转、哪些代码执行关键安全检查，以及如何扩展。
+本文面向维护者和希望审计 AutoFix 行为的使用者，对应版本 0.19.0。它说明系统为什么这样设计、一次修复如何流转、哪些代码执行关键安全检查，以及如何扩展。
 
 ## 1. 目标与非目标
 
@@ -42,6 +42,7 @@ flowchart TB
         DIAG[环境故障门禁<br/>agent/diagnostics.py]
         PLAN[确定性 plan v3<br/>agent/plans.py]
         ROLLBACK[撤销与回执<br/>agent/rollback.py]
+        EVALUATION[可重复评测<br/>evaluation.py]
     end
 
     subgraph Intelligence[模型边界]
@@ -61,6 +62,7 @@ flowchart TB
         REPAIRS[.autofix/repairs]
         PLANS[.autofix/plans]
         BACKUPS[backups 与 rollbacks]
+        EVALUATIONS[.autofix/evaluations]
     end
 
     USER --> CLI
@@ -87,6 +89,11 @@ flowchart TB
     PLAN --> REPAIR
     REPAIR --> ROLLBACK
     ROLLBACK --> BACKUPS
+    CLI --> EVALUATION
+    EVALUATION --> LOCAL
+    EVALUATION --> DOCKER
+    EVALUATION --> REPAIR
+    EVALUATION --> EVALUATIONS
 ```
 
 读图时应区分三条边界：配置和检测只决定候选验证计划；模型只能产生候选编辑；最终接受与否只由确定性校验器和真实构建结果决定。Ollama 不直接写项目文件，也不能绕过 `BuildStep` 矩阵。
@@ -107,6 +114,7 @@ flowchart TB
 src/autofix/
 ├── cli.py                  # 命令、参数、用户输出和退出码
 ├── config.py               # 用户级/项目级 YAML 合并与校验
+├── evaluation.py           # 评测契约、隔离 repair 计分与 JSON 报告
 ├── models.py               # BuildStep、ProjectMatch、ProjectInspection
 ├── detectors/project.py    # 构建系统与 Python 入口检测
 ├── builders/
@@ -129,6 +137,51 @@ src/autofix/
 ```
 
 `tests/` 按上述模块覆盖检测、配置、执行、Docker 参数、模型协议、补丁安全、隔离提交、plan、rollback、离线检查和 bundle。
+
+### 3.1 评测层不是另一套修复器
+
+`evaluation.py` 复用 `BuildStep`、`run_build`、`repair_project` 与 Docker runner，不复制 repair 算法。它只增加一个外部验收契约：用例必须在声明的步骤以预期退出码和输出特征稳定失败；模型修复必须通过原命令矩阵；最终变更路径必须落在 `allowed_change_paths` 内；`required_change_paths` 必须全部命中。
+
+```mermaid
+flowchart LR
+    M[autofix-eval.yml] --> V[严格 schema 与安全路径校验]
+    V --> B[执行声明命令]
+    B -->|原本通过| INVALID[无效用例]
+    B -->|任意失败| SIGN{退出码、步骤、输出签名匹配?}
+    SIGN -->|否| INVALID
+    SIGN -->|是| BASE[基线有效]
+    BASE -->|--repair| R[repair_project<br/>apply=false + isolate=true]
+    R --> S{最终构建通过?}
+    S -->|否| FAIL[评测失败]
+    S -->|是| P{路径范围符合契约?}
+    P -->|否| FAIL
+    P -->|是| PASS[评测通过]
+    PASS --> J[.autofix/evaluations/*.json]
+```
+
+评测命令永远不给 `repair_project` 传 `apply=true`。即使模型得到通过构建的方案，原始 fixture 仍保持故障状态，可重复运行。repair 模式会先独立执行一次 preflight；如果 `expected_failure` 不匹配，则不进入模型边界，proposal 数保持为 0。清单路径会统一为 POSIX 相对路径，并拒绝绝对路径、`..`、项目外解析结果、重复项和不存在的文件。评测报告同时记录清单 SHA-256，便于判断两次分数是否基于同一契约。
+
+### 3.2 独立重试与证据累积
+
+0.19.0 将“候选编辑状态”和“重试证据状态”分离。候选验证失败后，文件恢复到本轮开始前的字节；但 `VerificationFailure` 保留 diagnosis、`ValidatedChange.diff` 和 `BuildResult`。下一轮看到干净的编号源码，同时收到最近三轮累计证据。
+
+```mermaid
+flowchart TD
+    BASE[初始失败基线] --> MODEL[模型 diagnosis + 精确编辑]
+    MODEL --> STATIC{静态校验}
+    STATIC -->|拒绝| FEEDBACK[记录 rejection]
+    STATIC -->|通过| APPLY[临时应用候选]
+    APPLY --> BUILD{完整矩阵}
+    BUILD -->|通过| ACCEPT[合并最终 diff]
+    BUILD -->|失败| RECORD[记录 diagnosis、diff、BuildResult、新增失败]
+    RECORD --> RESTORE[恢复到基线字节]
+    RESTORE --> FEEDBACK
+    FEEDBACK --> CYCLE{重复 proposal 或已失败状态?}
+    CYCLE -->|是| REJECT[记录循环拒绝]
+    CYCLE -->|否| MODEL
+```
+
+首轮温度为 0，保证可重复；有失败证据的重试使用 0.15，帮助模型离开已证伪的局部答案。随机性不能绕过任何安全边界：JSON Schema、精确旧文本、路径限制、破坏性检查和真实构建仍全部执行。模型协议要求 `diagnosis` 只报告因果文件、编号行和分支事实，不要求也不保存隐藏推理过程。
 
 ## 4. 配置系统
 
@@ -403,11 +456,11 @@ sequenceDiagram
     end
 ```
 
-预览路径始终创建工作副本，即使没有显式指定 `--isolate`。图中的循环是累积修复：下一轮看到上一轮已经通过静态校验但尚未使构建通过的修改；失败副本不会写回原项目。
+预览路径始终创建工作副本，即使没有显式指定 `--isolate`。0.19.0 起，每个候选都从同一个初始故障基线开始；验证失败的候选会先记录 diagnosis、精确 diff、构建结果和新增失败测试，再把工作副本恢复到基线。下一轮不会继承错误源码，但会收到最近三轮累计失败证据。
 
-多轮尝试是累积的：第二轮看到第一轮修改后的工作副本和新的构建错误。这适合“一处修完后暴露下一处”的情况。最终 plan/diff 会合并成每个原文件到验证后最终文件的一次变化，不包含失败中间态。
+这种“源码状态独立、证据状态累积”的策略防止早期错误修改污染后续方案，也使最终 plan/diff 只包含一个从原文件到验证通过状态的变化。代价是目前不适合必须分多步、且每个中间步骤单独不能通过完整矩阵的迁移任务；这类任务需要未来显式的分阶段计划协议，不能通过隐式叠加失败候选实现。
 
-若提议在静态检查阶段被拒绝，拒绝原因、实际编辑和摘要会作为下一轮反馈，要求模型给出真正不同且最小的生产代码修改。
+若提议在静态检查阶段被拒绝，拒绝原因、实际编辑和摘要会作为下一轮反馈，要求模型给出真正不同且最小的生产代码修改。完全重复的 proposal 和回到已验证失败源码状态的循环会被确定性拒绝。
 
 ## 12. 预览、应用和并发安全
 
@@ -660,15 +713,16 @@ autofix run . --docker
 - rollback 依赖当前内容精确匹配已应用 diff；
 - Windows 离线 bootstrap 当前锁定 Python 3.11 wheelhouse。
 
-下一阶段的优先事项应是发布加固，而不是放宽安全门槛：
+下一阶段定义为“真实仓库安全接入与规模化评测”。优先级按风险依赖排序，而不是按功能数量排序：
 
-1. 在现有有序构建矩阵基础上增加跨系统自动组合、并行步骤和每步资源策略；
-2. 支持项目级 Dockerfile 与依赖锁文件生成可复现镜像；
-3. 引入 Git worktree 隔离并在提交前显示机器可读审批对象；
-4. 在首批多语言环境门禁基础上增加本地化输出、SDK/系统头文件诊断和真实缺依赖样例回归；
-5. 为大仓库增加符号/依赖相关的上下文检索；
-6. 对离线包加入签名、发布渠道和一键安装外壳；
-7. 建立真实项目评测集，度量修复成功率、错误文件率、破坏性提议拒绝率和平均尝试次数。
+1. **Git 安全接入**：识别脏工作区，默认拒绝覆盖未提交修改；在临时 branch/worktree 中修复，并输出可审查 patch、commit 或审批对象。
+2. **CI 契约**：稳定退出码和 JSON schema，提供无交互模式与 GitHub Actions 示例，但默认只产出候选结果，不自动合并。
+3. **规模化评测**：实现聚合 runner/scoreboard；扩展 Go、Rust、Java、C++ 与高级 Python/Node 用例；按模型、工具链、runner 和契约 hash 分组。
+4. **安全加固**：命令策略、非 root 容器、资源和超时上限、敏感信息脱敏及生成物审计。
+5. **语义上下文**：在前述评测可量化后，再引入 AST、符号/依赖图和测试到源码的相关性排序。
+6. **发布加固**：许可证、CI、可复现 wheel、签名、版本标签和离线分发验证。
+
+跨系统并行构建、项目镜像生成、文件创建/删除和远端模型后端均保留为后续能力；它们不能排在 Git 隔离、评测和安全策略之前。详细里程碑、完成标准和版本准备清单见[开发路线图](ROADMAP_ZH.md)。
 
 所有优化都应保持一个判断标准：模型可以更聪明，但写入项目的条件必须继续是可审计、可验证、可撤销。
 

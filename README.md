@@ -1,12 +1,24 @@
 # AutoFix
 
+[![CI](https://github.com/zhanghl-learner/docker-ollama-autofix/actions/workflows/ci.yml/badge.svg)](https://github.com/zhanghl-learner/docker-ollama-autofix/actions/workflows/ci.yml)
+
 AutoFix is a local-first command-line tool that detects a project's build system, reproduces failures, asks a local Ollama model for bounded line-level edits, validates them in isolation, and accepts only repairs that pass the real build or test command.
+
+## Positioning and maturity
+
+AutoFix is a safety-first code-repair engineering prototype and evaluation harness. It is intended for reproducible build or test failures in small and medium repositories where a developer can review the resulting diff. It is not positioned as a general autonomous programmer or as an unattended production service.
+
+The current evidence base includes 162 automated tests, real local repair loops across Python, Node.js, Go, C++, and Java, Docker-isolated Python verification, and two repeatable multi-file benchmark cases. The Windows suite passes all 162 tests; the Linux Docker self-host passes 161 and skips the one Windows-only `CreateProcess` integration test. In the current benchmark, `qwen3:0.6b` completed neither complex case, while `qwen2.5-coder:7b` completed both under the 0.19.0 retry protocol. These results demonstrate the repair pipeline and its ability to expose model differences; they do not yet establish broad success on arbitrary repositories.
+
+The next development phase is **safe real-repository integration and evaluation at scale**. Human review remains part of the intended workflow. See the [development roadmap](docs/ROADMAP_ZH.md) for milestones, acceptance criteria, and release preparation.
 
 ## Documentation
 
 - [中文使用手册](docs/USAGE_ZH.md) — installation, one-time setup, daily workflow, offline deployment, recovery, and troubleshooting.
 - [实现原理与代码架构](docs/ARCHITECTURE_ZH.md) — architecture, repair state machine, model protocol, validation, isolation, audit, rollback, tests, and extension points.
 - [多语言闭环验证报告](docs/MULTILANG_VALIDATION_ZH.md) — real Python, Node.js, Go, C++, and Java repair results plus missing-toolchain gates.
+- [复杂项目评测指南](docs/EVALUATION_ZH.md) — benchmark contracts, isolated model scoring, metrics, and fixture authoring.
+- [开发路线图与发布准备](docs/ROADMAP_ZH.md) — product positioning, maturity boundaries, milestone priorities, and definition of done.
 - [Changelog](CHANGELOG.md) — versioned feature and verification summary.
 
 ## Architecture at a glance
@@ -14,6 +26,9 @@ AutoFix is a local-first command-line tool that detects a project's build system
 ```mermaid
 flowchart LR
     PROJECT[Project + autofix.yml] --> DETECT[Detect and select BuildStep matrix]
+    CONTRACT[autofix-eval.yml] --> EVAL[Reproducible evaluation]
+    EVAL --> BUILD
+    EVAL --> MODEL
     DETECT --> BUILD[Local or constrained Docker build]
     BUILD -->|failure| DIAG{High-confidence environment failure?}
     DIAG -->|yes| STOP[Audit report, no model call]
@@ -28,7 +43,7 @@ flowchart LR
 
 The model proposes edits but never decides acceptance and never writes directly to the original project. The validator, the bound build matrix, and real process exit codes form the acceptance gate. See the [full architecture and sequence diagrams](docs/ARCHITECTURE_ZH.md).
 
-## Current MVP
+## Current capabilities
 
 - `autofix doctor` checks Python, Git, Docker/Podman, Ollama, and the local Ollama API.
 - `autofix configure` saves user-level runtime defaults that every new project inherits automatically.
@@ -40,8 +55,10 @@ The model proposes edits but never decides acceptance and never writes directly 
 - `autofix run [PATH]` executes the selected build plan without a shell and saves a JSON report under `.autofix/runs/`.
 - Ordered build matrices can be declared with `build.commands` or repeated `--step`; execution stops at the first failing step and repair is accepted only when every step passes.
 - `autofix repair [PATH]` sends bounded build diagnostics and numbered source context to local Ollama, validates exact line-level edits, verifies them in an isolated copy, and only then emits a unified diff and reusable plan.
+- Failed verified candidates are audited with their exact diff and test regressions, then discarded before the next attempt. Retries start from the same clean baseline, receive cumulative evidence, reject duplicate/cyclic states, and require a structured causal diagnosis before editing.
 - `autofix apply-plan PLAN --project PATH` applies the exact hash-bound proposal that was reviewed during preview, without a second model request. Plan v3 binds the ordered commands, local/Docker runner, timeout, image, network policy, and container limits, so later configuration changes cannot silently replace the reviewed build gate.
 - `autofix history [PATH]` lists timestamped repair audit reports, including rejected proposals, diffs, verification, and rollback outcomes.
+- `autofix evaluate [PATH]` validates an intentionally failing benchmark, including its expected exit code, failing step, and output signature; `--repair` runs Ollama only after that preflight matches, in an isolated copy, and scores changed-file scope against `autofix-eval.yml`.
 - `autofix rollback REPORT --project PATH` reverses a recorded repair and first backs up the replaced files.
 - `autofix undo [PATH]` automatically reverses the latest successful repair that has not already been undone.
 - `--docker` runs build verification in a constrained container against a disposable project copy.
@@ -73,6 +90,8 @@ autofix init C:\path\to\project --model qwen3:0.6b
 autofix inspect .
 autofix run . --dry-run
 autofix run .
+autofix evaluate examples\complex-validation\python-order-service
+autofix evaluate examples\complex-validation\python-order-service --repair
 autofix repair . --model qwen3:0.6b
 autofix history .
 autofix undo .
@@ -105,7 +124,7 @@ autofix rollback .autofix\repairs\REPORT.json --project .
 
 For the common case, `autofix undo .` selects the latest successful applied repair automatically. Every successful undo writes a receipt under `.autofix/rollbacks/`; `history` marks that repair as `undone`, and subsequent undo operations skip it.
 
-Test files are protected by default. Rejected no-op, test-file, or otherwise unsafe proposals consume an attempt and are returned to the model as retry feedback. Use `--allow-test-changes` only when the test itself is known to be incorrect.
+Test files are protected by default. Rejected no-op, test-file, duplicate, cyclic, or otherwise unsafe proposals consume an attempt and are returned to the model as retry feedback. A statically valid edit that fails verification is restored before the next attempt; its diff, model diagnosis, build output, and newly failing tests remain in the audit trail. Use `--allow-test-changes` only when the test itself is known to be incorrect.
 
 Applied repairs use `--isolate` by default: model edits and failed verification attempts occur in a temporary project copy, and only a successful final state is written back. AutoFix also refuses the commit if an original file changed concurrently. Use `--no-isolate` only for projects whose build cannot run from a copied workspace.
 
@@ -204,6 +223,14 @@ The bundle contains an offline Python wheelhouse and `install.ps1`, `docker/imag
 
 AutoFix runs only a known detected command or an explicit command supplied by the user. Repairs generate a diff, reject paths outside the project, use a bounded number of attempts, and are accepted only after the real build or tests pass. Failed applied repairs are rolled back unless `--keep-failed` is supplied.
 
+A passing build proves only the configured gate. It does not prove business correctness, security, or production readiness. Use a clean Git worktree, inspect the diff, and run independent checks before committing. Docker restrictions reduce risk but are not a strong sandbox for hostile repositories or build scripts.
+
+Evaluation is deliberately non-mutating. A baseline case passes only when its declared commands reproduce the expected failure signature; an unrelated import, toolchain, or environment failure is invalid. Repair evaluation additionally requires the final build to pass, every required file to be touched, and no file outside `allowed_change_paths` to change. Reports are saved under `.autofix/evaluations/`; use `--no-save` for ephemeral checks.
+
 ## Roadmap
 
-The current phase is release hardening. Priorities are explicit multi-build-system selection, reproducible project-specific images, Git worktree isolation, broader non-Python environment diagnostics, semantic context selection for large repositories, and signed/offline-friendly distribution.
+The v1 evaluation contract is established by the Python and Node.js multi-file boundary-condition fixtures. The next phase prioritizes Git worktree isolation and dirty-worktree protection, CI-friendly machine output, an aggregate benchmark runner, broader Go/Rust/Java/C++ cases, and security hardening. Semantic context selection and distribution hardening follow only after those foundations are measurable. The detailed order and exit criteria are maintained in [docs/ROADMAP_ZH.md](docs/ROADMAP_ZH.md).
+
+## License
+
+AutoFix is released under the [MIT License](LICENSE).

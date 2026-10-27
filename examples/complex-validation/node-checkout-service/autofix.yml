@@ -1,0 +1,10 @@
+version: 1
+build:
+  system: npm
+  commands:
+    - node --check src/pricing.js
+    - node --check src/checkout.js
+    - node test/checkout.test.js
+runtime:
+  ollama_model: qwen3:0.6b
+  offline: true

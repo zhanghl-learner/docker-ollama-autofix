@@ -1,5 +1,93 @@
 # Changelog
 
+## Unreleased
+
+- 尚无变更。
+
+## 0.19.0 - 2026-10-27
+
+### Added
+
+- 模型协议新增必填 `diagnosis`，要求在编辑前给出可审计的因果文件、源码行和分支行为说明；诊断写入 repair 报告和后续重试上下文。
+- 失败验证报告保存每轮实际 diff、构建结果和新增失败测试；evaluation 指标新增 `verification_failure_count`。
+- 新增精确重复 proposal 与已验证失败源码状态的循环检测。
+
+### Changed
+
+- 默认每轮验证失败后恢复到同一基线，下一候选不再叠加于错误源码；只有通过完整矩阵的候选才进入最终变更。
+- retry 上下文改为最多三轮累计历史，标注失败编辑位置和由该 diff 新引入的 unittest/pytest 失败。
+- retry 指令移到源码上下文之后，并使用低温度 `0.15` 避免确定性重复；首轮仍保持温度 0。
+- 删除容易将小模型锚定到“减法改加法”的提示示例，加入通用边界输入与分支可达性检查。
+
+### Fixed
+
+- Windows 工具发现测试不再修改进程级 `os.name`；平台分支改由模块内 `_is_windows()` 封装，使 Windows fallback 能在 Linux Docker 中测试而不会让 pytest/pathlib 错误实例化 `WindowsPath`。
+- 相对项目可执行文件测试将路径解析改为跨平台确定性单元测试，并单独保留 Windows `CreateProcess` 集成测试；Linux 加固容器不再尝试从故意设为 `noexec` 的 `/tmp` 直接启动临时脚本。
+
+### Documentation
+
+- 将项目定位明确为“本地优先、安全约束优先的代码修复工程原型与评测工具”，补充当前适用范围、人工审查责任和不能由构建通过推导出的结论。
+- 下一阶段统一调整为“真实仓库安全接入与规模化评测”，优先建设 Git worktree/脏工作区保护、CI 契约、聚合评测、安全加固和语义上下文。
+- 新增开发路线图与发布准备清单，并同步 README、使用手册、架构、评测指南和多语言验证报告。
+- 修正文档中仍描述“失败候选累积修改”的旧流程；0.19.0 实际采用同一源码基线重试并累计失败证据。
+
+### Repository
+
+- 添加 MIT License，将生成的 Java `.class` 文件从版本控制移除并加入忽略规则。
+- 通过隔离 PEP 517 构建生成 `autofix_cli-0.19.0-py3-none-any.whl`，并在临时虚拟环境完成版本与项目检测 smoke test。
+- 新增 GitHub Actions CI：Windows/Linux 测试与复杂 fixture 基线、Ubuntu Docker 自举及 wheel 构建/安装 smoke test。
+
+### Verified
+
+- `qwen2.5-coder:7b` 在 Python 订单边界用例第 2 个 proposal 将 `quantity > 10` 修复为 `quantity >= 10`，评测通过。
+- 同一模型在 Node 免邮边界用例第 1 个 proposal 完成修复，评测通过。
+- 两次 evaluation 均保持原 fixture 不变，修改路径和必改路径契约全部满足。
+- Windows 本机 162 项 pytest 通过；Linux Docker 自举的 compileall 与 pytest 步骤均通过，其中 161 项通过、1 项 Windows-only 测试按设计跳过。
+
+## 0.18.0 - 2026-10-26
+
+### Added
+
+- `autofix-eval.yml` 新增可选 `expected_failure`，支持预期退出码、1-based 失败步骤、必含输出和禁含输出。
+- evaluation JSON 新增 `failure_contract_matched` 与逐项 mismatch 原因。
+
+### Safety
+
+- repair 评测先执行确定性 preflight；失败签名不符时不调用模型，proposal 数为 0。
+- 防止导入错误、缺少依赖或错误构建步骤仅因“退出非零”而冒充有效业务故障。
+
+### Fixed
+
+- Python `src/` 复杂用例在测试入口显式设置导入路径，使原项目和隔离副本行为一致，不再依赖 `sitecustomize` 启动时机。
+
+### Verified
+
+- Python 与 Node 复杂基线均同时显示 `initial failure: confirmed` 和 `failure contract: matched`。
+- 使用真实 `qwen3:0.6b` 重新评测后，两者均进入模型边界并准确记录 3 个 proposal、3 个 rejection；原 fixture 保持不变。
+
+## 0.17.0 - 2026-10-26
+
+### Added
+
+- 新增 `autofix evaluate` 与严格的 `autofix-eval.yml` v1 契约，用于验证故障基线并生成可比较的 JSON 报告。
+- `--repair` 只在隔离副本运行模型修复，按允许/必改文件范围、构建结果、提议数和拒绝数计分，不修改原始用例。
+- 新增 Python 订单定价和 Node.js 结算服务两个多文件、边界条件、多步骤复杂用例。
+
+### Safety
+
+- 评测清单拒绝未知字段、绝对路径、路径穿越、项目外解析、重复路径、不存在文件及不属于允许范围的必改路径。
+- 报告保存清单 SHA-256；用例若初始即通过会被判为无效，而不是虚报修复成功。
+
+### Documentation
+
+- 新增复杂项目评测指南，并同步 README、架构图、多语言验证报告和路线图。
+
+### Verified
+
+- 单元测试覆盖失败基线、隔离修复不改原文件和危险路径拒绝。
+- Python/Node 两个复杂用例均已在真实本地运行器确认故障基线。
+- 真实 `qwen3:0.6b` 复杂用例评测为 0/2；无效/no-op 提议均被拒绝，失败仍保存完整 evaluation 报告且 fixture 字节不变。
+
 ## 0.16.0 - 2026-10-26
 
 ### Documentation

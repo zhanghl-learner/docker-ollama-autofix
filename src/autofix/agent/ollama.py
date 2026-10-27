@@ -14,6 +14,7 @@ REPAIR_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "summary": {"type": "string"},
+        "diagnosis": {"type": "string"},
         "edits": {
             "type": "array",
             "items": {
@@ -36,7 +37,7 @@ REPAIR_SCHEMA: dict[str, Any] = {
             },
         },
     },
-    "required": ["summary", "edits"],
+    "required": ["summary", "diagnosis", "edits"],
     "additionalProperties": False,
 }
 
@@ -69,6 +70,7 @@ class RepairProposal:
     summary: str
     changes: tuple[FileChange, ...] = ()
     edits: tuple[FileEdit, ...] = ()
+    diagnosis: str = ""
 
 
 class OllamaError(RuntimeError):
@@ -146,6 +148,8 @@ rename files, run commands, edit dependencies unless required, or use paths not 
 {test_policy}
 Treat test assertions as the required behavior. When actual and expected values differ,
 trace the referenced function into a non-test source file and correct its implementation.
+When one exact boundary input fails but a neighboring input passes, inspect the comparison
+operator or branch reachability before changing code inside an already-correct branch.
 Never hard-code a literal that only satisfies the displayed test input; preserve the
 function parameters and repair the general operation. Copy leading whitespace exactly,
 including tabs, from the numbered source line into incorrect_code and corrected_code.
@@ -160,19 +164,25 @@ must not overlap. Make the smallest edit possible.
 Before responding, verify that every corrected_code differs from incorrect_code and that the
 actual edit implements the stated summary and reason; a correct explanation with
 an unchanged edit is invalid.
+Before choosing edits, simulate the failing input through relevant conditions. Put a concise,
+auditable explanation in diagnosis: name the causal production file and numbered line,
+state the observed branch result, the required branch result, and why the proposed edit
+changes that behavior. The edits must implement that diagnosis exactly. Do not use diagnosis
+for hidden chain-of-thought; report only these concrete control-flow facts.
 Example insertion before line 1: {{"path":"main.py","start_line":1,
 "incorrect_code":"","corrected_code":"import torch\\n","reason":"import referenced module"}}.
 Example replacing only line 2: {{"path":"main.py","start_line":2,
-"incorrect_code":"    return left - right\\n","corrected_code":"    return left + right\\n",
-"reason":"use addition"}}.
+"incorrect_code":"    result = old_api()\\n","corrected_code":"    result = new_api()\\n",
+"reason":"call the supported API"}}.
 The response must match this JSON schema exactly:
 {json.dumps(response_schema, ensure_ascii=False)}
 
 BUILD FAILURE:
 {failure}
-{retry_note}
+
 PROJECT FILES:
 {file_sections}
+{retry_note}
 """
         payload = {
             "model": model,
@@ -188,7 +198,10 @@ PROJECT FILES:
             "stream": False,
             "think": False,
             "format": response_schema,
-            "options": {"temperature": 0},
+            # A first attempt is deterministic. A low retry temperature helps
+            # capable models leave an already disproven local optimum while all
+            # output remains bounded by schema, patch validation, and rebuilding.
+            "options": {"temperature": 0.15 if previous_attempt else 0},
         }
         try:
             response = httpx.post(f"{self.base_url}/api/chat", json=payload, timeout=self.timeout)
@@ -205,6 +218,8 @@ def validate_proposal(data: object) -> RepairProposal:
 
     if not isinstance(data, dict) or not isinstance(data.get("summary"), str):
         raise OllamaError("Repair proposal must contain a string summary")
+    if not isinstance(data.get("diagnosis"), str) or not data["diagnosis"].strip():
+        raise OllamaError("Repair proposal must contain a non-empty diagnosis")
     raw_edits = data.get("edits")
     if not isinstance(raw_edits, list):
         raise OllamaError("Repair proposal must contain an edits array")
@@ -239,5 +254,7 @@ def validate_proposal(data: object) -> RepairProposal:
                 item["reason"],
             )
         )
-    return RepairProposal(data["summary"], edits=tuple(edits))
+    return RepairProposal(
+        data["summary"], edits=tuple(edits), diagnosis=data["diagnosis"].strip()
+    )
 

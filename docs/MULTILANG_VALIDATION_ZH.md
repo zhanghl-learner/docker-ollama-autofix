@@ -1,6 +1,6 @@
 # AutoFix 多语言闭环验证报告
 
-本文记录 2026-10-23 在 Windows 环境中完成的真实多语言基线验收，以及 AutoFix 0.16.0 对该闭环的自动化回归。基线成功组不是 mock：实际执行了本地 `qwen3:0.6b`、真实编译器或测试运行器、隔离预览、plan 应用、独立重建与 undo。后续版本新增的 plan 确定性字段、多语言环境门禁和补丁安全回归由单元测试、CLI 集成测试和项目自举矩阵覆盖；下文会区分真实模型验收与后续回归。
+本文记录 2026-10-23 至 2026-10-27 在 Windows 环境中完成的真实多语言验收，以及 AutoFix 0.19.0 对该闭环的自动化回归。基线成功组不是 mock：实际执行了本地 Ollama、真实编译器或测试运行器、隔离预览、plan 应用、独立重建与 undo。后续版本新增的 plan 确定性字段、多语言环境门禁、补丁安全和复杂用例评测由单元测试、CLI 集成测试和项目自举矩阵覆盖；下文会区分真实模型验收与后续回归。
 
 ## 1. 测试环境
 
@@ -117,6 +117,16 @@ repair 预览以前无论是否使用 Docker，都打印带 `--docker` 的 apply
 
 0.16.0 在补齐英文 docstring 时发现，Python 顶层定义删除检查位于换行归一化函数的提前 `return` 之后，实际不可达。修复后新增一个小文件用例：替换内容没有删除超过一半的非空行，但删除了公开顶层函数，必须以 `removes top-level definitions` 拒绝。这验证了两类破坏性门禁彼此独立，而不是仅依赖文件长度比例。
 
+### 5.10 Linux 容器中的 Windows 模拟测试
+
+发布前 Docker 自举运行到 `test_find_executable_discovers_per_user_docker` 时，测试通过修改共享 `os` 模块的 `os.name` 来模拟 Windows。Linux 上 `pathlib.Path` 因此错误选择 `WindowsPath`；测试失败后 pytest 生成报告时也读取了被污染的平台状态，最终显示 `INTERNALERROR`，掩盖了原始失败。
+
+平台判断现封装为 `runtime.tools._is_windows()`，测试只替换该模块内函数，不再修改解释器级平台状态。这个回归说明本机 Windows 测试通过不能替代 Linux Docker 自举，两者应同时保留在发布检查中。
+
+修复后 Docker 又暴露出相对可执行文件测试与容器策略的冲突：pytest 的 `tmp_path` 位于 `/tmp`，而加固容器有意使用 `noexec` 挂载 `/tmp`。旧测试即使设置执行位也不能直接启动临时 shell 脚本。现在路径解析由不执行文件的跨平台单元测试覆盖，Windows `CreateProcess` 的真实执行由仅限 Windows 的独立测试覆盖；没有为了让测试通过而移除容器的 `noexec` 安全限制。
+
+最终复验结果为：Windows 本机 162 项通过；Linux Docker 的 compileall 与 pytest 两个步骤均通过，其中 161 项通过、1 项 Windows-only 集成测试按设计跳过。Docker 仍保持只读根文件系统和 `/tmp:rw,noexec,nosuid` 策略。
+
 ## 6. 模型质量观察
 
 安全闭环通过不等于代码风格完美。0.6B 模型曾：
@@ -163,3 +173,34 @@ autofix repair examples\multilang-validation\gradle-missing
 在这台机器已经安装的真实工具链范围内，AutoFix 已完成 Python、Node.js、Go、C++、Java 五种语言的源码修改闭环；Python 额外完成 Docker 离线隔离验证。Rust、Maven、Gradle 因工具缺失未声称修复成功，但环境门禁行为符合设计。
 
 因此准确结论是：AutoFix 的语言无关 repair 管线能够处理多种文本源码和构建矩阵；最终覆盖范围仍取决于真实工具链、项目测试质量、Docker 镜像内容以及本地模型能力。
+
+## 9. 0.17.0 复杂项目评测起点
+
+`examples/complex-validation/` 新增两个不依赖第三方库的多文件用例：
+
+| 用例 | 跨文件调用 | 验证步骤 | 故障 | 允许修改 |
+| --- | --- | ---: | --- | --- |
+| `python-order-service` | tests → package export → pricing | compileall + 4 个 unittest | 十件商品的折扣边界 | `src/order_service/pricing.py` |
+| `node-checkout-service` | test → checkout → pricing | 两个 syntax check + 4 个 assertion | 5000 分的免邮边界 | `src/pricing.js` |
+
+两个用例均已用 `autofix evaluate ... --no-save` 确认能够稳定复现初始失败。随后使用真实本地 `qwen3:0.6b`、`--max-attempts 3` 进行隔离评测，结果为 0/2：Python 的首次候选改错了输入校验语句，后续候选旧文本无法锚定；Node 三次都对 `checkout.js` 提交 no-op，没有修改实际边界条件所在的 `pricing.js`。两次最终构建均未通过，原 fixture 未改变，安全校验按预期拒绝了无效方案。
+
+这不是框架失败，也不会包装成成功结论：它表明 0.6B 模型在跨文件定位上不足。评测过程中还发现“模型被安全拒绝时只有 repair 报告”的可观测性缺口；0.17.0 已修复为无论模型成功、验证失败或提议被拒绝，均生成 evaluation JSON，并保留提议数、拒绝数、错误和 repair 报告引用。既有第 3 节五语言结果仍是早期真实模型闭环记录。
+
+第一次由用户独立复现 Python 用例时，任意非零退出码被错误接受为有效基线，实际失败是 `order_service` 导入失败。0.18.0 增加 `expected_failure` 后，两个复杂用例都绑定了退出码、失败步骤、业务断言文本和环境错误排除文本；Python fixture 也在测试入口显式加载 `src/`。重新验证显示两个基线均为 `failure contract: matched`，真实模型评测均产生 3 个 proposal 和 3 个 rejection，不再把环境失败计为模型结果。
+
+0.19.0 使用真实 `qwen2.5-coder:7b` 重新运行两个复杂用例。Python 首轮错误修改折扣计算，并新增一个测试失败；系统记录该 diff、恢复基线，第二轮将第 10 行 `quantity > 10` 改为 `quantity >= 10`，四项测试全部通过。Node 首轮把 `subtotalCents > 5000` 改为 `>= 5000` 并通过。最终结果为 2/2，两个 evaluation 的修改路径、必改路径和禁止越界规则全部满足，原始 fixture 保持故障状态以便复测。
+
+## 10. 证据边界与下一轮基线
+
+上述结果证明的是：语言无关修复管线能够在当前样例和工具链上完成检测、受限编辑、真实验证、审计与撤销；v1 evaluation 能可靠区分基线错误、模型失败和合约通过。它尚不能证明对任意仓库、任意语言或生产故障具有稳定成功率。
+
+下一轮验证不再以增加一个简单 `add()` 样例为目标，而以真实仓库接入风险为中心：
+
+- Git 脏工作区不得被静默覆盖，修复应在 branch/worktree 中隔离；
+- 同一评测集能够批量运行并生成聚合指标；
+- Go、Rust、Java、C++ 至少各有跨文件业务故障和环境门禁；
+- CI 能验证 schema、安全门禁和 fixture 基线，真实模型结果与 mock 测试分开；
+- 所有公开数字包含模型、版本、runner、工具链、日期和失败样本。
+
+这些条件的版本顺序与完成定义统一维护在[开发路线图](ROADMAP_ZH.md)，避免验证报告和实现计划分别漂移。

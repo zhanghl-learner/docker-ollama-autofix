@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from autofix.builders import runner
 from autofix.builders import run_build
 from autofix.models import BuildStep
@@ -42,19 +44,25 @@ def test_missing_executable_returns_127(tmp_path: Path) -> None:
     assert result.exit_code == 127
 
 
-def test_runs_relative_project_executable(tmp_path: Path) -> None:
+def test_resolves_relative_project_executable(tmp_path: Path) -> None:
     script = tmp_path / "tools" / "check.py"
     script.parent.mkdir()
-    script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    script.chmod(0o755)
-    step = BuildStep("relative", (str(Path("tools") / "check.py"),))
+    script.write_text("placeholder", encoding="utf-8")
+    relative = str(Path("tools") / "check.py")
 
-    if sys.platform == "win32":
-        # Windows cannot execute .py directly through CreateProcess, so use a
-        # copied native executable to exercise project-relative resolution.
-        executable = tmp_path / "tools" / "cmd.exe"
-        executable.write_bytes(Path(os.environ["COMSPEC"]).read_bytes())
-        step = BuildStep("relative", (str(Path("tools") / "cmd.exe"), "/c", "exit", "0"))
+    argv = runner._execution_argv(
+        tmp_path, BuildStep("relative", (relative, "--check"))
+    )
+
+    assert argv == [str(script.resolve()), "--check"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises Windows CreateProcess")
+def test_runs_relative_project_executable_on_windows(tmp_path: Path) -> None:
+    executable = tmp_path / "tools" / "cmd.exe"
+    executable.parent.mkdir()
+    executable.write_bytes(Path(os.environ["COMSPEC"]).read_bytes())
+    step = BuildStep("relative", (str(Path("tools") / "cmd.exe"), "/c", "exit", "0"))
 
     result = run_build(tmp_path, (step,), save_report=False)
 

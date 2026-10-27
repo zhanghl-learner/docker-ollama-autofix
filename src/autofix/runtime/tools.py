@@ -7,6 +7,12 @@ import shutil
 from pathlib import Path
 
 
+def _is_windows() -> bool:
+    """Return whether Windows-only executable fallback paths should be used."""
+
+    return os.name == "nt"
+
+
 def _windows_candidates(name: str) -> tuple[Path, ...]:
     local = os.environ.get("LOCALAPPDATA")
     program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
@@ -29,14 +35,12 @@ def _windows_candidates(name: str) -> tuple[Path, ...]:
 
 
 def find_executable(name: str) -> str | None:
-    """Return an executable path, including Windows fallback locations."""
-
     """Resolve a tool from PATH or common per-user Windows install locations."""
 
     found = shutil.which(name)
     if found:
         return found
-    if os.name == "nt":
+    if _is_windows():
         for candidate in _windows_candidates(name):
             if candidate.is_file():
                 return str(candidate)

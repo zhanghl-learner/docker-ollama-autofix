@@ -1,6 +1,6 @@
 # AutoFix 中文使用手册
 
-本文对应 AutoFix 0.16.0。AutoFix 在本机执行真实构建或测试，把失败信息和受限源码上下文交给本地 Ollama，验证模型给出的精确行级修改，并且只在修复通过完整构建矩阵后生成可应用方案或写回项目。
+本文对应 AutoFix 0.19.0。AutoFix 在本机执行真实构建或测试，把失败信息和受限源码上下文交给本地 Ollama，验证模型给出的精确行级修改，并且只在修复通过完整构建矩阵后生成可应用方案或写回项目。
 
 ## 1. 先理解三个原则
 
@@ -9,6 +9,17 @@
 3. 推荐先预览，再用 `autofix apply-plan` 应用已经看过的精确结果。直接使用 `--apply` 更快，但应当配合版本控制。
 
 AutoFix 修复的是“被实际命令暴露出来的错误”。如果命令只做语法编译，例如 `python -m compileall -q .`，运行时的 `NameError` 不会出现，也就没有可供修复的失败。可执行脚本应使用 `python 文件名.py`，有测试的项目应使用测试命令。
+
+### 1.1 当前定位与适用范围
+
+AutoFix 0.19.0 是本地优先、安全约束优先的代码修复工程原型，不是无人监管的通用开发代理。当前推荐用于：
+
+- 能由固定命令稳定复现的编译、测试或局部逻辑失败；
+- 有版本控制、可审查 diff 的个人项目或小团队内部试用；
+- 源码不适合发送到云端、希望使用本地 Ollama 的场景；
+- 中小型仓库中受限文件范围内的现有代码修改。
+
+当前不建议直接用于：无测试的大型遗留系统、未审查的第三方构建脚本、生产主分支上的无人值守写入，以及把“测试通过”直接等同于业务正确或安全合格。完整的成熟度边界、下一阶段目标和验收标准见[开发路线图](ROADMAP_ZH.md)。
 
 ## 2. 环境要求
 
@@ -268,6 +279,25 @@ autofix repair . --build-system cargo --max-attempts 3
 选择值必须与实际检测结果一致。支持的值为 `python`、`cmake`、`maven`、`gradle`、`npm`、`pnpm`、`yarn`、`cargo` 和 `go`。命令行 `--build-system` 覆盖项目配置；`build.command` 或 `--command` 仍可进一步指定该系统的实际入口。
 
 ## 8. 常用命令速查
+
+### 8.1 复杂用例评测
+
+仓库维护者可以用 `autofix-eval.yml` 固定故障、完整验证矩阵和允许修改的文件。先确认用例确实失败：
+
+```powershell
+autofix evaluate examples\complex-validation\python-order-service
+```
+
+再让本地模型在隔离副本中尝试修复并计分：
+
+```powershell
+autofix evaluate examples\complex-validation\python-order-service `
+  --repair --model qwen3:0.6b --max-attempts 3
+```
+
+`evaluate --repair` 不会修改原用例。0.18.0 起，退出码、失败步骤或输出文本与 `expected_failure` 不符时，不会调用模型；这可以阻止 `ModuleNotFoundError` 等环境错误冒充业务故障。最终构建通过但修改了清单范围外的文件，或者没有命中 `required_change_paths`，仍判为失败。详细清单格式、指标和扩展规范见 [复杂项目评测指南](EVALUATION_ZH.md)。
+
+0.19.0 起，每个模型候选必须包含可审计的 `diagnosis`。候选通过静态校验但构建失败时，AutoFix 保存本轮 diff、构建输出和新增失败测试，然后把工作区恢复到初始故障状态；下一轮从干净源码重新修复，而不是叠加在错误修改上。完全重复的编辑和恢复到已验证失败状态的循环会被拒绝。CLI 的 `verification failures` 表示“能够应用但未通过构建”的候选数量，它与静态 `rejections` 是不同指标。
 
 | 命令 | 用途 | 是否改源码 |
 | --- | --- | --- |
@@ -534,6 +564,7 @@ autofix undo .
 6. 不对不可信仓库执行自定义构建命令；构建脚本本身就是可执行代码。
 7. 将 `.autofix` 报告保留到审查完成，但对 plan 和日志按源码敏感级别管理。
 8. 重要项目始终使用 Git；AutoFix 的隔离、hash 和撤销是第二道防线，不是版本控制替代品。
+9. 把 AutoFix 视为“生成并验证候选补丁”的工具；合并前仍需代码审查、项目自己的安全检查和独立回归。
 
 跨语言真实验证过程和当前工具链边界见[多语言闭环验证报告](MULTILANG_VALIDATION_ZH.md)。
 

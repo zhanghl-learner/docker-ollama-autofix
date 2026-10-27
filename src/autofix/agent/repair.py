@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass, replace
@@ -76,6 +77,7 @@ class RepairResult:
     rolled_back: bool
     isolated: bool = False
     rejections: tuple["ProposalRejection", ...] = ()
+    verification_failures: tuple["VerificationFailure", ...] = ()
     report_path: Path | None = None
 
     @property
@@ -100,6 +102,7 @@ class RepairResult:
             "proposals": [
                 {
                     "summary": proposal.summary,
+                    "diagnosis": proposal.diagnosis,
                     "changes": [
                         {
                             "path": change.path,
@@ -129,6 +132,9 @@ class RepairResult:
                 for proposal in self.proposals
             ],
             "rejections": [rejection.to_dict() for rejection in self.rejections],
+            "verification_failures": [
+                failure.to_dict() for failure in self.verification_failures
+            ],
             "changes": [
                 {
                     "path": change.relative_path,
@@ -153,6 +159,128 @@ class ProposalRejection:
         """Serialize a rejected attempt for the repair report."""
 
         return {"attempt": self.attempt, "summary": self.summary, "reason": self.reason}
+
+
+@dataclass(frozen=True)
+class VerificationFailure:
+    """A statically valid proposal whose resulting build still failed."""
+
+    attempt: int
+    summary: str
+    diagnosis: str
+    changes: tuple[ValidatedChange, ...]
+    build: BuildResult
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the attempted diff and its deterministic build result."""
+
+        return {
+            "attempt": self.attempt,
+            "summary": self.summary,
+            "diagnosis": self.diagnosis,
+            "changes": [
+                {
+                    "path": change.relative_path,
+                    "reason": change.reason,
+                    "diff": change.diff,
+                }
+                for change in self.changes
+            ],
+            "build": self.build.to_dict(),
+        }
+
+
+def _proposal_fingerprint(proposal: RepairProposal) -> str:
+    """Return a stable identity for detecting an exactly repeated proposal."""
+
+    payload = {
+        "changes": [
+            {"path": item.path, "content": item.content, "reason": item.reason}
+            for item in proposal.changes
+        ],
+        "edits": [
+            {
+                "path": item.path,
+                "start_line": item.start_line,
+                "delete_lines": item.delete_lines,
+                "old_text": item.old_text,
+                "new_text": item.new_text,
+                "reason": item.reason,
+            }
+            for item in proposal.edits
+        ],
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _verification_retry_feedback(
+    failures: list[VerificationFailure],
+    *,
+    baseline: BuildResult,
+    latest_rejection: str | None = None,
+) -> str:
+    """Give the next attempt cumulative diffs and their resulting diagnostics."""
+
+    def failed_checks(build: BuildResult) -> set[str]:
+        """Extract common unittest and pytest failure identifiers for deltas."""
+
+        output = "\n".join(
+            f"{step.stdout}\n{step.stderr}" for step in build.steps
+        )
+        checks = set(
+            re.findall(r"^(test\S+) .* \.\.\. (?:FAIL|ERROR)$", output, re.MULTILINE)
+        )
+        checks.update(re.findall(r"^FAILED\s+(\S+)", output, re.MULTILINE))
+        return checks
+
+    baseline_checks = failed_checks(baseline)
+    sections: list[str] = []
+    for item in failures[-3:]:
+        diff = "\n".join(change.diff for change in item.changes)
+        failure = format_failure(item.build)
+        changed_locations = ", ".join(
+            f"{change.relative_path} "
+            + " ".join(re.findall(r"@@[^@]+@@", change.diff))
+            for change in item.changes
+        )
+        new_failures = sorted(failed_checks(item.build) - baseline_checks)
+        regression = (
+            "\nNEWLY FAILING CHECKS CAUSED BY THIS DIFF: " + ", ".join(new_failures)
+            if new_failures
+            else ""
+        )
+        sections.append(
+            f"ATTEMPT {item.attempt}: {item.summary}\n"
+            f"MODEL DIAGNOSIS: {item.diagnosis or 'not provided'}\n"
+            f"FAILED EDIT LOCATIONS: {changed_locations}\n"
+            "APPLIED DIFF:\n"
+            f"{diff}\n"
+            "VERIFICATION FAILURE AFTER THAT DIFF:\n"
+            f"{failure}{regression}"
+        )
+    history = "\n\n".join(sections)
+    # Current numbered files are sent separately and remain the source of truth
+    # for the next coordinates, so bound historical diagnostics aggressively.
+    if len(history) > 24_000:
+        history = "... [older retry history truncated]\n" + history[-24_000:]
+    rejection = (
+        f"\nLATEST PROPOSAL REJECTION:\n{latest_rejection}\n"
+        if latest_rejection
+        else ""
+    )
+    return (
+        "Earlier proposals passed static validation but did not pass verification.\n"
+        f"{history}{rejection}\n"
+        "Do not repeat, reverse, or cosmetically rewrite an earlier failed change. "
+        "An edit limited to a previously failed location is invalid unless it also "
+        "changes a different causal condition. If a diff introduced a newly failing "
+        "check, treat the edited statement as previously correct for that behavior. "
+        "Compare all observed outcomes with the current numbered source. Trace "
+        "whether each failing boundary input reaches the edited statement, then "
+        "repair the causal condition, control flow, or operation with a different "
+        "minimal edit."
+    )
 
 
 def _save_repair_report(root: Path, result: RepairResult, *, error: str | None = None) -> Path:
@@ -217,6 +345,9 @@ def repair_project(
     previous_attempt: str | None = None
     last_rejection: UnsafePatchError | None = None
     rejections: list[ProposalRejection] = []
+    verification_failures: list[VerificationFailure] = []
+    proposal_fingerprints: set[str] = set()
+    seen_file_versions: dict[str, set[str]] = {}
     temporary: tempfile.TemporaryDirectory[str] | None = None
     work_root = root
     original_files: dict[str, bytes] = {}
@@ -250,6 +381,7 @@ def repair_project(
             rolled_back,
             using_temporary,
             tuple(rejections),
+            tuple(verification_failures),
         )
         if save_report:
             result = replace(
@@ -268,6 +400,21 @@ def repair_project(
                 allow_test_changes=allow_test_changes,
             )
             proposals.append(proposal)
+            fingerprint = _proposal_fingerprint(proposal)
+            if fingerprint in proposal_fingerprints:
+                last_rejection = UnsafePatchError(
+                    "Duplicate proposal repeats an earlier edit without progress"
+                )
+                rejections.append(
+                    ProposalRejection(attempt, proposal.summary, str(last_rejection))
+                )
+                previous_attempt = _verification_retry_feedback(
+                    verification_failures,
+                    baseline=initial,
+                    latest_rejection=str(last_rejection),
+                )
+                continue
+            proposal_fingerprints.add(fingerprint)
             try:
                 changes = validate_changes(
                     work_root,
@@ -287,25 +434,65 @@ def repair_project(
                     }
                     for edit in proposal.edits
                 ]
-                previous_attempt = (
+                latest_feedback = (
                     f"The previous proposal summary was: {proposal.summary}. "
                     f"Its actual edits were: {json.dumps(edit_details, ensure_ascii=False)}. "
                     f"It was rejected before application: {exc}. "
                     "Return a real, minimal production-code change whose corrected_code "
                     "actually implements that summary and differs from incorrect_code."
                 )
+                previous_attempt = (
+                    _verification_retry_feedback(
+                        verification_failures,
+                        baseline=initial,
+                        latest_rejection=latest_feedback,
+                    )
+                    if verification_failures
+                    else latest_feedback
+                )
                 continue
-            all_changes.extend(changes)
-
+            repeated_state = True
+            for change in changes:
+                versions = seen_file_versions.setdefault(
+                    change.relative_path,
+                    {hashlib.sha256(change.original.encode("utf-8")).hexdigest()},
+                )
+                replacement_hash = hashlib.sha256(
+                    change.replacement.encode("utf-8")
+                ).hexdigest()
+                if replacement_hash not in versions:
+                    repeated_state = False
+            if changes and repeated_state:
+                last_rejection = UnsafePatchError(
+                    "Repair cycle detected: proposal restores a previously observed "
+                    "failed source state"
+                )
+                rejections.append(
+                    ProposalRejection(attempt, proposal.summary, str(last_rejection))
+                )
+                previous_attempt = _verification_retry_feedback(
+                    verification_failures,
+                    baseline=initial,
+                    latest_rejection=str(last_rejection),
+                )
+                continue
             for change in changes:
                 if using_temporary:
                     original = root / change.relative_path
                     original_files.setdefault(change.relative_path, original.read_bytes())
                 else:
                     backups.setdefault(change.path, change.path.read_bytes())
+            attempt_backups = {
+                change.path: change.path.read_bytes() for change in changes
+            }
             apply_changes(changes)
+            for change in changes:
+                seen_file_versions[change.relative_path].add(
+                    hashlib.sha256(change.replacement.encode("utf-8")).hexdigest()
+                )
             current = build_runner(work_root, steps, timeout_seconds=timeout_seconds)
             if current.succeeded:
+                all_changes.extend(changes)
                 final_changes: tuple[ValidatedChange, ...] = tuple(all_changes)
                 if using_temporary:
                     consolidated: list[ValidatedChange] = []
@@ -349,7 +536,22 @@ def repair_project(
                 )
                 cleanup()
                 return result
-            previous_attempt = format_failure(current)
+            verification_failures.append(
+                VerificationFailure(
+                    attempt, proposal.summary, proposal.diagnosis, changes, current
+                )
+            )
+            previous_attempt = _verification_retry_feedback(
+                verification_failures, baseline=initial
+            )
+            if not keep_failed:
+                # Each retry starts from the same known failing baseline. This
+                # prevents a later model call from having to undo an earlier bad
+                # edit before it can address the original cause.
+                restore_files(attempt_backups)
+                current = initial
+            else:
+                all_changes.extend(changes)
     except Exception:
         if backups and not keep_failed and not using_temporary:
             restore_files(backups)

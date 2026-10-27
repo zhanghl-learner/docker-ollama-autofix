@@ -1,0 +1,24 @@
+version: 1
+name: node-checkout-free-shipping-boundary
+language: JavaScript
+difficulty: intermediate
+commands:
+  - node --check src/pricing.js
+  - node --check src/checkout.js
+  - node test/checkout.test.js
+expected_failure:
+  exit_code: 1
+  failed_step: 3
+  output_contains:
+    - free shipping starts at the boundary
+    - 799 !== 0
+  output_excludes:
+    - Cannot find module
+allowed_change_paths:
+  - src/pricing.js
+required_change_paths:
+  - src/pricing.js
+tags:
+  - multi-file
+  - boundary-condition
+  - ordered-build-matrix

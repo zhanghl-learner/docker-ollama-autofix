@@ -20,7 +20,57 @@ runner = CliRunner()
 def test_version() -> None:
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert "autofix 0.16.0" in result.stdout
+    assert "autofix 0.19.0" in result.stdout
+
+
+def test_evaluate_confirms_intentionally_failing_baseline(tmp_path: Path) -> None:
+    (tmp_path / "broken.py").write_text("raise SystemExit(1)\n", encoding="utf-8")
+    (tmp_path / "autofix-eval.yml").write_text(
+        """version: 1
+name: cli-baseline
+language: Python
+difficulty: basic
+commands: [python broken.py]
+allowed_change_paths: [broken.py]
+required_change_paths: [broken.py]
+tags: [cli]
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["evaluate", str(tmp_path), "--no-save"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "Baseline is valid" in result.stdout
+
+
+def test_evaluate_rejects_wrong_failure_signature(tmp_path: Path) -> None:
+    (tmp_path / "broken.py").write_text(
+        "print('environment failure')\nraise SystemExit(1)\n", encoding="utf-8"
+    )
+    (tmp_path / "autofix-eval.yml").write_text(
+        """version: 1
+name: wrong-failure
+language: Python
+difficulty: basic
+commands: [python broken.py]
+expected_failure:
+  exit_code: 1
+  failed_step: 1
+  output_contains: [expected business failure]
+allowed_change_paths: [broken.py]
+required_change_paths: [broken.py]
+tags: [cli]
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["evaluate", str(tmp_path), "--no-save"])
+
+    assert result.exit_code == 1
+    assert "failure contract" in result.stdout
+    assert "mismatched" in result.stdout
+    assert "required output is missing" in result.stdout
 
 
 def test_configure_saves_user_defaults_for_new_projects(tmp_path: Path) -> None:
