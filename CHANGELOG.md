@@ -5,6 +5,7 @@
 ### Fixed
 
 - Windows 相对项目可执行文件集成测试改用临时 `.cmd`，不再复制系统 `cmd.exe`；保留 `shell=False` 的真实执行覆盖，同时兼容 GitHub 托管 Windows runner 的安全策略。
+- CI 保存 pytest JUnit 结果，并把失败测试与异常发布为 GitHub Check annotation，避免托管 runner 日志不可匿名下载时丢失诊断信息。
 
 ## 0.19.0 - 2026-10-27
 

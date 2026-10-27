@@ -38,7 +38,23 @@ jobs:
         run: python -m compileall -q src tests
 
       - name: Run automated tests
-        run: python -m pytest -q
+        run: python -m pytest -q --junitxml=pytest-results.xml
+
+      - name: Publish pytest failure annotations
+        if: failure()
+        shell: pwsh
+        run: |
+          [xml]$report = Get-Content -LiteralPath pytest-results.xml -Raw
+          $failed = $report.SelectNodes('//testcase[failure or error]')
+          foreach ($case in $failed) {
+            $detail = if ($case.failure) { $case.failure.InnerText } else { $case.error.InnerText }
+            $message = "$($case.classname)::$($case.name)`n$detail"
+            $encoded = $message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=pytest failure::$encoded"
+          }
+          if (-not $failed) {
+            Write-Output '::error title=pytest failure::pytest failed without a JUnit failure node'
+          }
 
       - name: Validate Python evaluation baseline
         run: autofix evaluate examples/complex-validation/python-order-service --no-save
