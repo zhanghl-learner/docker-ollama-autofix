@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
+from autofix.agent.artifacts import save_standalone_patch
 from autofix.agent.context import collect_source_context, format_failure
 from autofix.agent.diagnostics import RepairEnvironmentError, environment_failure
 from autofix.agent.ollama import RepairProposal
@@ -87,6 +88,8 @@ class RepairResult:
     rejections: tuple["ProposalRejection", ...] = ()
     verification_failures: tuple["VerificationFailure", ...] = ()
     report_path: Path | None = None
+    patch_path: Path | None = None
+    patch_sha256: str | None = None
     project_root: Path | None = None
     workspace_kind: str = "original"
     repository_root: Path | None = None
@@ -99,6 +102,12 @@ class RepairResult:
         """Return the final build verdict."""
 
         return self.final_build.succeeded
+
+    @property
+    def diff_sha256(self) -> str | None:
+        """Return the canonical verified diff identity when changes exist."""
+
+        return validated_diff_sha256(self.changes) if self.changes else None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize audit data without duplicating full proposal contents."""
@@ -120,9 +129,9 @@ class RepairResult:
                 "repository_fingerprint": self.repository_fingerprint,
                 "project_subpath": self.project_subpath,
             },
-            "diff_sha256": (
-                validated_diff_sha256(self.changes) if self.changes else None
-            ),
+            "diff_sha256": self.diff_sha256,
+            "patch_path": str(self.patch_path) if self.patch_path else None,
+            "patch_sha256": self.patch_sha256,
             "initial_build": self.initial_build.to_dict(),
             "final_build": self.final_build.to_dict(),
             "proposals": [
@@ -336,9 +345,10 @@ def repair_project(
     allow_destructive_changes: bool = False,
     isolate: bool = False,
     save_report: bool = True,
+    patch_output: Path | str | None = None,
     build_runner: Callable[..., BuildResult] = run_build,
 ) -> RepairResult:
-    """Build, request bounded repairs, validate, rebuild, and optionally commit.
+    """Build, request bounded repairs, validate, rebuild, and optionally write back.
 
     Preview and isolated apply operations mutate only a temporary workspace.
     Original files are written only after the complete build matrix succeeds and
@@ -474,11 +484,22 @@ def repair_project(
     ) -> RepairResult:
         """Assemble and optionally persist the current repair outcome."""
 
+        selected_changes = (
+            result_changes if result_changes is not None else tuple(all_changes)
+        )
+        patch_path: Path | None = None
+        patch_sha256: str | None = None
+        if current.succeeded and selected_changes and (save_report or patch_output is not None):
+            artifact = save_standalone_patch(
+                root, selected_changes, destination=patch_output
+            )
+            patch_path = artifact.path
+            patch_sha256 = artifact.sha256
         result = RepairResult(
             initial,
             current,
             tuple(proposals),
-            result_changes if result_changes is not None else tuple(all_changes),
+            selected_changes,
             applied,
             rolled_back,
             using_temporary,
@@ -490,6 +511,8 @@ def repair_project(
             baseline_commit=git_status.head_commit,
             repository_fingerprint=git_status.repository_fingerprint,
             project_subpath=git_status.project_subpath,
+            patch_path=patch_path,
+            patch_sha256=patch_sha256,
         )
         if save_report:
             result = replace(

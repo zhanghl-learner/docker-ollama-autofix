@@ -42,7 +42,9 @@ flowchart LR
     PATCH --> SANDBOX[Verify in worktree or disposable copy]
     SANDBOX -->|pass| PLAN[Git provenance + policy bound plan v4]
     PLAN --> APPLY[Deterministic apply-plan]
-    APPLY --> AUDIT[Report, history, rollback, undo]
+    APPLY --> ARTIFACT[Standalone patch + SHA-256]
+    ARTIFACT --> AUDIT[Report, history, rollback, undo]
+    ARTIFACT -->|explicit --commit only| COMMIT[Exact-file local commit]
     SANDBOX -->|fail| MODEL
 ```
 
@@ -63,6 +65,8 @@ The model proposes edits but never decides acceptance and never writes directly 
 - `autofix repair [PATH]` requires a clean committed Git baseline, then runs baseline reproduction, model edits, and verification in a detached temporary worktree. Dirty/unborn repositories stop before build or Ollama; non-Git projects retain disposable-copy isolation.
 - Failed verified candidates are audited with their exact diff and test regressions, then discarded before the next attempt. Retries start from the same clean baseline, receive cumulative evidence, reject duplicate/cyclic states, and require a structured causal diagnosis before editing.
 - `autofix apply-plan PLAN --project PATH` applies the exact reviewed proposal without a second model request. Plan v4 binds the v3 execution policy plus repository fingerprint, baseline commit, project subpath, original file hashes, and final diff SHA-256.
+- Every successful repair writes a standalone unified patch and its byte-level SHA-256. Use `--patch-output FILE` for a CI-friendly location; existing files are never overwritten.
+- `repair --apply --commit` and `apply-plan --commit` can create one local commit containing only the verified files. AutoFix rechecks HEAD, repository identity, file bytes, and the exact Git change set, preserves hooks, and never pushes or merges.
 - `autofix history [PATH]` lists timestamped repair audit reports, including rejected proposals, diffs, verification, and rollback outcomes.
 - `autofix evaluate [PATH]` validates an intentionally failing benchmark, including its expected exit code, failing step, and output signature; `--repair` runs Ollama only after that preflight matches, in an isolated copy, and scores changed-file scope against `autofix-eval.yml`.
 - `autofix rollback REPORT --project PATH` reverses a recorded repair and first backs up the replaced files.
@@ -117,6 +121,15 @@ For deterministic approval, preview first and use the emitted plan path:
 autofix repair C:\path\to\project --docker --max-attempts 3
 autofix apply-plan C:\path\to\project\.autofix\plans\PLAN.json --project C:\path\to\project
 ```
+
+To retain a portable patch or explicitly create a local commit after the same verification gate:
+
+```powershell
+autofix apply-plan .autofix\plans\PLAN.json --project . --patch-output artifacts\repair.patch
+autofix apply-plan .autofix\plans\PLAN.json --project . --commit --commit-message "fix: apply verified AutoFix repair"
+```
+
+The patch is plain unified diff and can be checked with `git apply --check`. The optional commit records an `AutoFix-Diff-SHA256` trailer. Commit hooks still run; if a hook or Git identity check fails, the verified files remain applied for inspection and no push or merge is attempted.
 
 Plans contain only the consolidated original-to-verified-final result, the SHA-256 of every original file, and the verification policy that passed preview. Plan v4 automatically reuses its local/Docker runner, timeout, commands, image, network policy, and resource limits, so `--docker` does not need to be repeated. For Git projects it also rejects a different repository, HEAD, or project subpath; every plan verifies a canonical final diff SHA-256. Failed intermediate attempts are not included. Keep `.autofix/plans` private because it can contain project source code.
 

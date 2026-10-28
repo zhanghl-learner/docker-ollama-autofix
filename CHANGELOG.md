@@ -10,14 +10,17 @@
 - Git repair 默认从 HEAD 创建 detached 临时 worktree；基线复现、模型编辑和完整验证都在其中运行，仓库子目录会映射到 worktree 内的对应位置。
 - repair report 升级为 v2，新增 workspace 类型、仓库根目录和基线 commit；临时执行路径不会写入持久报告。
 - repair plan v4 在 v3 执行策略之上绑定仓库指纹、基线 commit、项目子路径和规范化最终 diff SHA-256；v1–v3 保持兼容读取。
+- 成功 repair/apply-plan 输出可移植 unified patch、patch 原始字节 SHA-256，并支持 `--patch-output` 写入 CI 指定的新文件。
+- `repair --apply --commit` 与 `apply-plan --commit` 支持创建只包含验证文件的本地 commit，并写入 `AutoFix-Diff-SHA256` trailer。
 
 ### Safety
 
-- 脏 Git 仓库和尚无 commit 的仓库在构建、Ollama 请求和源码修改前停止；AutoFix 不自动 stash、clean、commit、push 或 merge。
+- 脏 Git 仓库和尚无 commit 的仓库在构建、Ollama 请求和源码修改前停止；AutoFix 不自动 stash、clean、commit、push 或 merge，只有显式 `--commit` 才能在验证后创建本地提交。
 - worktree 在成功、验证失败、模型异常和 `KeyboardInterrupt` 后定向移除；清理失败不会自动全局 prune，以免影响用户的其他 worktree。
 - 非 Git 项目继续使用临时副本；验证成功的 `--apply` 仍需通过原文件字节级并发检查才写回目标文件。
 - Git-bound plan 在仓库身份、HEAD、项目子路径或工作区状态漂移时于写入前停止；检测到 `.git` 但 Git 不可用时不再降级为非 Git 流程。
 - repair 策略仅排除当前项目 `.autofix/` 下的未跟踪审计产物，避免工具被自己的报告阻塞；原始 `git-status` 仍显示 dirty，其他未跟踪或 tracked 修改继续阻断。
+- 本地 commit 前重新检查仓库指纹、HEAD、目标文件 SHA-256 和完整变更集合；不覆盖 patch、不提交审计产物或无关文件、不绕过 hooks，也不执行 amend/push/merge。
 
 ### CI
 
@@ -25,8 +28,8 @@
 
 ### Verified
 
-- Windows 本机 189 项 pytest、`compileall`、Python/Node 复杂 fixture 基线和 workflow YAML 检查通过。
-- 隔离 PEP 517 wheel 构建通过，并确认 `autofix/repository.py` 已包含在生成包中。
+- Windows 本机 199 项 pytest、`compileall`、Python/Node 复杂 fixture 基线和 workflow YAML 检查通过。
+- 隔离 PEP 517 wheel 构建通过，并确认 `autofix/repository.py` 与 `autofix/agent/artifacts.py` 已包含在生成包中。
 
 ### Fixed
 

@@ -40,6 +40,7 @@ flowchart TB
     subgraph Orchestration[编排层]
         STEPS[BuildStep 矩阵<br/>models.py]
         REPAIR[修复状态机<br/>agent/repair.py]
+        PATCH_ARTIFACT[独立 patch 产物<br/>agent/artifacts.py]
         DIAG[环境故障门禁<br/>agent/diagnostics.py]
         PLAN[Git/策略绑定 plan v4<br/>agent/plans.py]
         ROLLBACK[撤销与回执<br/>agent/rollback.py]
@@ -63,6 +64,7 @@ flowchart TB
         RUNS[.autofix/runs]
         REPAIRS[.autofix/repairs]
         PLANS[.autofix/plans]
+        PATCHES[.autofix/patches]
         BACKUPS[backups 与 rollbacks]
         EVALUATIONS[.autofix/evaluations]
     end
@@ -89,6 +91,9 @@ flowchart TB
     DIAG -->|环境故障| REPAIRS
     RESULT --> RUNS
     REPAIR --> REPAIRS
+    REPAIR --> PATCH_ARTIFACT
+    PATCH_ARTIFACT --> PATCHES
+    PATCH_ARTIFACT -->|显式 --commit| GIT
     REPAIR --> PLAN
     PLAN --> PLANS
     PLAN --> REPAIR
@@ -132,7 +137,8 @@ src/autofix/
 │   ├── diagnostics.py      # 明确环境错误分类
 │   ├── ollama.py           # 提示词、JSON Schema、HTTP 客户端
 │   ├── patches.py          # 行编辑归一化、验证、应用与恢复
-│   ├── repair.py           # 多轮修复状态机、隔离验证、提交、报告
+│   ├── artifacts.py        # 确定性 unified patch、独占写入与字节摘要
+│   ├── repair.py           # 多轮修复状态机、隔离验证、写回、报告
 │   ├── plans.py            # 预览 plan、原文件 hash、重新校验
 │   ├── rollback.py         # 反向 diff、备份、回执和 undo 选择
 │   └── textio.py           # 保留 LF/CRLF 的精确 UTF-8 源码读写
@@ -562,7 +568,7 @@ flowchart TD
     APPLY[在隔离副本应用已审核内容]
     VERIFY{同一绑定策略<br/>完整验证通过?}
     RACE{写回前原文件 bytes<br/>仍未变化?}
-    COMMIT[原子式逐文件写回<br/>并保存审计报告]
+    WRITEBACK[原子式逐文件写回<br/>并保存审计报告/patch]
     STOP[停止，源码保持不变]
 
     INPUT --> SCHEMA
@@ -583,7 +589,7 @@ flowchart TD
     VERIFY -->|否| STOP
     VERIFY -->|是| RACE
     RACE -->|否| STOP
-    RACE -->|是| COMMIT
+    RACE -->|是| WRITEBACK
 ```
 
 “绑定”与“断言”含义不同：plan 中的值是实际执行值；调用方重复传入 `--step`、`--docker/--local`、`--timeout` 或 Docker 资源选项时，这些参数只用于确认预期，不能覆盖 plan。这样可以阻止预览之后的配置漂移，也避免自动化脚本误把 Docker plan 降级为本机验证。
@@ -607,6 +613,38 @@ flowchart LR
 
 兼容读取不等于旧格式拥有新格式的保证。需要最高确定性时，应重新执行预览生成 v4，而不是手工修改旧 plan 的版本号。
 
+### 13.3 Standalone patch 与显式本地 commit
+
+`artifacts.py` 按项目相对路径排序 `ValidatedChange`，拼接标准 `a/...` → `b/...` unified diff，以 `xb` 独占模式写入新文件，并对文件原始 UTF-8 bytes 计算 SHA-256。默认目录为 `.autofix/patches/`；`--patch-output` 可指定 CI artifact 路径，但拒绝覆盖任何已有文件。该 patch 可在原始 baseline 上使用 `git apply --check` 检查。
+
+本地 commit 是验证成功后的第二个、显式门禁，不属于模型能力。CLI 仅在 `repair --apply --commit` 或 `apply-plan --commit` 时调用 `create_local_repair_commit()`：
+
+```mermaid
+flowchart TD
+    SUCCESS[修复已写回且完整验证通过]
+    REQUEST{调用方显式 --commit?}
+    IDENTITY{仓库指纹与 HEAD<br/>仍等于修复基线?}
+    BYTES{目标文件 bytes SHA-256<br/>仍等于验证结果?}
+    STATUS{Git blocking changes<br/>恰好等于目标 pathspec?}
+    LOCAL[git commit --only<br/>运行 hooks + 写 diff trailer]
+    DONE[返回本地 commit ID]
+    KEEP[停止提交；保留已验证源码供审查]
+
+    SUCCESS --> REQUEST
+    REQUEST -->|否| KEEP
+    REQUEST -->|是| IDENTITY
+    IDENTITY -->|否| KEEP
+    IDENTITY -->|是| BYTES
+    BYTES -->|否| KEEP
+    BYTES -->|是| STATUS
+    STATUS -->|否| KEEP
+    STATUS -->|是| LOCAL
+    LOCAL -->|成功| DONE
+    LOCAL -->|hook/Git 失败| KEEP
+```
+
+提交命令使用 `--only -- <排序后的精确路径>`，不会把 `.autofix` 报告、patch 或其他文件带入 commit；显式输出到仓库内的新 patch 经摘要核对后可作为已知未跟踪 artifact 排除，但仍留在工作区供上传。commit 保留仓库 hooks，不使用 `--no-verify`，不 amend，也不调用 stash、clean、push 或 merge。提交失败不会伪装为修复失败或删除已经验证通过的源码，而是以退出码 2 要求人工处理。
+
 ## 14. 审计与报告
 
 `BuildResult` 包含根目录、所有步骤的 argv、退出码、stdout、stderr、超时状态和耗时。repair 报告额外包含：
@@ -617,6 +655,7 @@ flowchart LR
 - 静态拒绝原因；
 - 最终 unified diff；
 - workspace 类型、仓库指纹、基线 commit、项目子路径与最终 diff SHA-256；
+- standalone patch 路径及其原始字节 SHA-256；
 - 是否应用、隔离、回滚和成功；
 - 顶层错误说明。
 
@@ -756,8 +795,8 @@ autofix run . --docker
 
 下一阶段定义为“真实仓库安全接入与规模化评测”。优先级按风险依赖排序，而不是按功能数量排序：
 
-1. **Git 溯源绑定**：在已有脏工作区门禁与 detached worktree 隔离上，把基线 commit、仓库身份和最终 diff digest 绑定到 plan；成功结果只输出可审查 patch/可选 commit，不自动 push 或 merge。
-2. **CI 契约**：稳定退出码和 JSON schema，提供无交互模式与 GitHub Actions 示例，但默认只产出候选结果，不自动合并。
+1. **Git 溯源绑定（已完成当前切片）**：基线 commit、仓库身份、项目子路径和最终 diff digest 已绑定到 plan；成功结果输出可审查 patch，并仅在显式请求时创建本地 commit，不自动 push 或 merge。
+2. **CI 契约（下一切片）**：稳定退出码和 JSON schema，提供无交互模式与 GitHub Actions 示例，但默认只产出候选结果，不自动合并。
 3. **规模化评测**：实现聚合 runner/scoreboard；扩展 Go、Rust、Java、C++ 与高级 Python/Node 用例；按模型、工具链、runner 和契约 hash 分组。
 4. **安全加固**：命令策略、非 root 容器、资源和超时上限、敏感信息脱敏及生成物审计。
 5. **语义上下文**：在前述评测可量化后，再引入 AST、符号/依赖图和测试到源码的相关性排序。

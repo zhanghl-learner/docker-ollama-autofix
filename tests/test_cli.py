@@ -23,6 +23,13 @@ def test_version() -> None:
     assert "autofix 0.19.0" in result.stdout
 
 
+def test_repair_commit_requires_apply_before_environment_work(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["repair", str(tmp_path), "--commit"])
+
+    assert result.exit_code == 2
+    assert "--commit requires --apply" in result.stdout
+
+
 def test_evaluate_confirms_intentionally_failing_baseline(tmp_path: Path) -> None:
     (tmp_path / "broken.py").write_text("raise SystemExit(1)\n", encoding="utf-8")
     (tmp_path / "autofix-eval.yml").write_text(
@@ -291,13 +298,26 @@ def test_apply_plan_uses_reviewed_content_without_model(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    patch_output = tmp_path / "review" / "verified.patch"
     result = runner.invoke(
-        app, ["apply-plan", str(plan), "--project", str(tmp_path)]
+        app,
+        [
+            "apply-plan",
+            str(plan),
+            "--project",
+            str(tmp_path),
+            "--patch-output",
+            str(patch_output),
+        ],
     )
 
     assert result.exit_code == 0, result.stdout
     assert "bound to repair plan v3" in result.stdout
     assert "applied and verified successfully" in result.stdout
+    assert "Standalone patch:" in result.stdout
+    assert "verified.patch" in result.stdout
+    assert patch_output.is_file()
+    assert "--- a/calculator.py" in patch_output.read_text(encoding="utf-8")
     assert "return left + right" in source.read_text(encoding="utf-8")
 
 

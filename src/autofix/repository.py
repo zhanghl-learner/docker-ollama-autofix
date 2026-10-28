@@ -20,6 +20,10 @@ class GitWorktreeError(RuntimeError):
     """Raised when an isolated Git worktree cannot be created or removed."""
 
 
+class GitCommitError(RuntimeError):
+    """Raised when an explicitly requested local repair commit is unsafe or fails."""
+
+
 @dataclass(frozen=True)
 class GitChange:
     """One entry from Git porcelain status output."""
@@ -413,3 +417,139 @@ def create_detached_worktree(status: GitWorkspaceStatus) -> DetachedGitWorktree:
         status.head_commit,
         temporary,
     )
+
+
+def create_local_repair_commit(
+    path: Path | str,
+    files: tuple[tuple[str, str], ...],
+    *,
+    message: str,
+    baseline_commit: str,
+    repository_fingerprint: str,
+    diff_sha256: str,
+    artifacts: tuple[tuple[Path, str], ...] = (),
+) -> str:
+    """Commit only verified repair files after rechecking repository provenance.
+
+    ``files`` contains project-relative paths and SHA-256 hashes of their
+    expected post-repair bytes. The function never stages unrelated files and
+    never pushes, merges, amends, or bypasses repository hooks.
+    """
+
+    if not message.strip() or "\0" in message:
+        raise GitCommitError("Local commit message must be a non-empty string")
+    if not files:
+        raise GitCommitError("Cannot create a local commit without repaired files")
+    if len({relative for relative, _ in files}) != len(files):
+        raise GitCommitError("Local commit file list contains duplicate paths")
+
+    try:
+        status = inspect_git_workspace(path)
+    except GitInspectionError as exc:
+        raise GitCommitError(f"Unable to inspect repository before commit: {exc}") from exc
+    if not status.is_repository or status.repository_root is None:
+        raise GitCommitError("--commit requires a Git repository")
+    if status.head_commit != baseline_commit:
+        raise GitCommitError("Git HEAD changed after repair; local commit was not created")
+    if status.repository_fingerprint != repository_fingerprint:
+        raise GitCommitError("Git repository identity changed after repair")
+    if status.project_subpath is None:
+        raise GitCommitError("Unable to resolve the repaired project subpath")
+
+    project_root = status.requested_root
+    prefix = Path() if status.project_subpath == "." else Path(status.project_subpath)
+    expected_repository_paths: set[str] = set()
+    for relative, expected_sha256 in files:
+        candidate = Path(relative)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise GitCommitError(f"Unsafe local commit path: {relative}")
+        target = (project_root / candidate).resolve()
+        try:
+            target.relative_to(project_root)
+        except ValueError as exc:
+            raise GitCommitError(f"Local commit path escapes project: {relative}") from exc
+        if not target.is_file():
+            raise GitCommitError(f"Repaired file is missing before commit: {relative}")
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        if digest != expected_sha256:
+            raise GitCommitError(
+                f"Repaired file changed before local commit: {relative}"
+            )
+        expected_repository_paths.add((prefix / candidate).as_posix())
+
+    ignored_artifact_paths: set[str] = set()
+    for artifact_path, expected_sha256 in artifacts:
+        resolved_artifact = artifact_path.expanduser().resolve()
+        try:
+            artifact_relative = resolved_artifact.relative_to(status.repository_root)
+        except ValueError:
+            continue
+        if not resolved_artifact.is_file():
+            raise GitCommitError(f"Expected repair artifact is missing: {resolved_artifact}")
+        if hashlib.sha256(resolved_artifact.read_bytes()).hexdigest() != expected_sha256:
+            raise GitCommitError(f"Repair artifact changed before local commit: {resolved_artifact}")
+        repository_relative = artifact_relative.as_posix()
+        artifact_change = next(
+            (change for change in status.changes if change.path == repository_relative),
+            None,
+        )
+        if artifact_change is not None and not artifact_change.untracked:
+            raise GitCommitError("Local commit will not ignore a tracked repair artifact")
+        ignored_artifact_paths.add(repository_relative)
+
+    relevant_changes = tuple(
+        change
+        for change in status.blocking_changes
+        if change.path not in ignored_artifact_paths
+    )
+    actual_paths = {change.path for change in relevant_changes}
+    if actual_paths != expected_repository_paths:
+        unexpected = sorted(actual_paths - expected_repository_paths)
+        missing = sorted(expected_repository_paths - actual_paths)
+        details: list[str] = []
+        if unexpected:
+            details.append("unexpected changes: " + ", ".join(unexpected))
+        if missing:
+            details.append("expected changes not reported by Git: " + ", ".join(missing))
+        raise GitCommitError(
+            "Git worktree no longer contains exactly the verified repair files"
+            + (" (" + "; ".join(details) + ")" if details else "")
+        )
+    if any(change.status != " M" or change.original_path for change in relevant_changes):
+        raise GitCommitError(
+            "Local commit accepts only unstaged modifications to existing tracked files"
+        )
+
+    git = find_executable("git")
+    if git is None:
+        raise GitCommitError("Git became unavailable before local commit")
+    repository_paths = sorted(expected_repository_paths)
+    committed = _run_git(
+        git,
+        status.repository_root,
+        "commit",
+        "--only",
+        "-m",
+        message.strip(),
+        "-m",
+        f"AutoFix-Diff-SHA256: {diff_sha256}",
+        "--",
+        *repository_paths,
+        timeout_seconds=120,
+    )
+    if committed.returncode != 0:
+        detail = committed.stderr.strip() or committed.stdout.strip() or "unknown Git error"
+        raise GitCommitError(
+            "Verified files remain applied, but the local commit failed: " + detail
+        )
+    new_head = _required_output(
+        git,
+        status.repository_root,
+        "rev-parse",
+        "--verify",
+        "HEAD",
+        operation="read new local commit",
+    ).strip()
+    if not new_head or new_head == baseline_commit:
+        raise GitCommitError("Git reported success but did not create a new commit")
+    return new_head

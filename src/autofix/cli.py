@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shlex
 from pathlib import Path
@@ -16,6 +17,7 @@ from autofix.agent import (
     OllamaError,
     PlanError,
     PlanProvenance,
+    RepairArtifactError,
     RepairEnvironmentError,
     RollbackError,
     latest_rollback_candidate,
@@ -43,8 +45,10 @@ from autofix.evaluation import (
 )
 from autofix.models import BuildStep, ProjectInspection
 from autofix.repository import (
+    GitCommitError,
     GitInspectionError,
     GitWorktreeError,
+    create_local_repair_commit,
     inspect_git_workspace,
     validate_git_repair_workspace,
 )
@@ -189,6 +193,48 @@ def _same_step_commands(
     """Compare executable arguments while allowing presentation labels to differ."""
 
     return tuple(step.argv for step in left) == tuple(step.argv for step in right)
+
+
+def _commit_verified_result(result: object, message: str) -> str:
+    """Create one local commit containing only the verified repair files."""
+
+    if not getattr(result, "succeeded", False) or not getattr(result, "applied", False):
+        raise GitCommitError("A local commit requires an applied, verified repair")
+    repository_root = getattr(result, "repository_root", None)
+    baseline_commit = getattr(result, "baseline_commit", None)
+    repository_fingerprint = getattr(result, "repository_fingerprint", None)
+    project_root = getattr(result, "project_root", None)
+    diff_sha256 = getattr(result, "diff_sha256", None)
+    if (
+        not all(
+            isinstance(value, str) and value
+            for value in (baseline_commit, repository_fingerprint, diff_sha256)
+        )
+        or repository_root is None
+        or project_root is None
+    ):
+        raise GitCommitError("--commit requires a provenance-bound Git repair")
+    files = tuple(
+        (
+            change.relative_path,
+            hashlib.sha256(change.replacement.encode("utf-8")).hexdigest(),
+        )
+        for change in getattr(result, "changes", ())
+    )
+    return create_local_repair_commit(
+        project_root,
+        files,
+        message=message,
+        baseline_commit=baseline_commit,
+        repository_fingerprint=repository_fingerprint,
+        diff_sha256=diff_sha256,
+        artifacts=(
+            ((result.patch_path, result.patch_sha256),)
+            if getattr(result, "patch_path", None) is not None
+            and isinstance(getattr(result, "patch_sha256", None), str)
+            else ()
+        ),
+    )
 
 
 @app.callback()
@@ -939,6 +985,21 @@ def apply_plan(
     docker_cpus: float | None = typer.Option(None, min=0.1, max=64),
     docker_memory: str | None = typer.Option(None),
     docker_pids: int | None = typer.Option(None, min=16, max=4096),
+    patch_output: Path | None = typer.Option(
+        None,
+        "--patch-output",
+        dir_okay=False,
+        help="Write the verified standalone patch to this new file.",
+    ),
+    commit: bool = typer.Option(
+        False,
+        "--commit",
+        help="Create a local Git commit after verified application; never push or merge.",
+    ),
+    commit_message: str = typer.Option(
+        "autofix: apply verified repair",
+        help="Message for the optional local commit.",
+    ),
 ) -> None:
     """Apply the exact reviewed repair plan without asking the model again."""
 
@@ -948,6 +1009,8 @@ def apply_plan(
         inspection, build_system or (config.build_system if config else None)
     )
     try:
+        if not commit and commit_message != "autofix: apply verified repair":
+            raise PlanError("--commit-message requires --commit")
         plan, _ = load_repair_plan(
             plan_path,
             inspection.root,
@@ -1060,17 +1123,35 @@ def apply_plan(
             allow_destructive_changes=allow_destructive_changes,
             isolate=isolate,
             build_runner=build_runner,
+            patch_output=patch_output,
         )
-    except (DockerConfigurationError, PlanError, UnsafePatchError, ValueError) as exc:
+    except (
+        DockerConfigurationError,
+        PlanError,
+        RepairArtifactError,
+        UnsafePatchError,
+        ValueError,
+    ) as exc:
         console.print(f"[red]Plan application stopped: {exc}[/red]")
         raise typer.Exit(code=2) from exc
 
     if result.report_path:
         console.print(f"Repair report: {result.report_path}")
+    if result.patch_path:
+        console.print(f"Standalone patch: {result.patch_path}")
+        console.print(f"Patch SHA-256: {result.patch_sha256}")
     if result.initial_build.succeeded:
         console.print("[yellow]The project already passes; the plan was not applied.[/yellow]")
         return
     if result.succeeded:
+        if commit:
+            try:
+                commit_id = _commit_verified_result(result, commit_message)
+            except GitCommitError as exc:
+                console.print(f"[red]Local commit stopped: {exc}[/red]")
+                raise typer.Exit(code=2) from exc
+            console.print(f"[green]Created local commit: {commit_id}[/green]")
+            console.print("[cyan]No push or merge was performed.[/cyan]")
         console.print("[green]Reviewed plan applied and verified successfully.[/green]")
         return
     console.print("[red]Reviewed plan failed verification; the original project was unchanged.[/red]")
@@ -1111,8 +1192,30 @@ def repair(
     docker_memory: str = typer.Option("2g", help="Container memory limit."),
     docker_pids: int = typer.Option(256, min=16, max=4096, help="Container process limit."),
     allow_network: bool = typer.Option(False, help="Allow container networking; disabled by default."),
+    patch_output: Path | None = typer.Option(
+        None,
+        "--patch-output",
+        dir_okay=False,
+        help="Write the verified standalone patch to this new file.",
+    ),
+    commit: bool = typer.Option(
+        False,
+        "--commit",
+        help="Create a local Git commit after --apply succeeds; never push or merge.",
+    ),
+    commit_message: str = typer.Option(
+        "autofix: apply verified repair",
+        help="Message for the optional local commit.",
+    ),
 ) -> None:
     """Ask local Ollama for a repair; preview changes unless --apply is set."""
+
+    if commit and not apply:
+        console.print("[red]--commit requires --apply; preview never changes Git history.[/red]")
+        raise typer.Exit(code=2)
+    if not commit and commit_message != "autofix: apply verified repair":
+        console.print("[red]--commit-message requires --commit.[/red]")
+        raise typer.Exit(code=2)
 
     inspection = inspect_project(path)
     config = _load_config_or_exit(inspection.root)
@@ -1185,11 +1288,13 @@ def repair(
             allow_destructive_changes=allow_destructive_changes,
             isolate=isolate,
             build_runner=build_runner,
+            patch_output=patch_output,
         )
     except (
         DockerConfigurationError,
         OllamaError,
         RepairEnvironmentError,
+        RepairArtifactError,
         UnsafePatchError,
     ) as exc:
         console.print(f"[red]Repair stopped: {exc}[/red]")
@@ -1204,6 +1309,9 @@ def repair(
         )
     if result.report_path:
         console.print(f"Repair report: {result.report_path}")
+    if result.patch_path:
+        console.print(f"Standalone patch: {result.patch_path}")
+        console.print(f"Patch SHA-256: {result.patch_sha256}")
     if result.initial_build.succeeded:
         console.print("[green]The project already passes; no repair was requested.[/green]")
         return
@@ -1255,6 +1363,14 @@ def repair(
         )
         return
     if result.succeeded:
+        if commit:
+            try:
+                commit_id = _commit_verified_result(result, commit_message)
+            except GitCommitError as exc:
+                console.print(f"[red]Local commit stopped: {exc}[/red]")
+                raise typer.Exit(code=2) from exc
+            console.print(f"[green]Created local commit: {commit_id}[/green]")
+            console.print("[cyan]No push or merge was performed.[/cyan]")
         console.print("[green]Repair verified: the build now passes.[/green]")
         return
     if result.rolled_back:

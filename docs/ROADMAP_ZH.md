@@ -159,7 +159,7 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 2. [x] 覆盖非 Git、干净 Git、tracked/untracked 脏工作区和 detached HEAD；CI 使用 `--require-clean` 验证干净检出契约；
 3. [x] 在 preview/default-isolate 路径接入 detached worktree；基线、编辑和验证均不在原工作树运行，失败、异常和取消路径清理注册项；
 4. [x] repair report v2 与 plan v4 记录仓库指纹、基线 commit、项目子路径和最终 diff SHA-256；v1–v3 继续兼容读取；
-5. [ ] 输出独立 patch 与可选本地 commit，并保留人工确认边界；不自动 push 或 merge。
+5. [x] 输出独立 patch 与原始字节 SHA-256；支持显式 `--commit` 创建只含验证文件的本地 commit，并保留 hooks 与人工确认边界；不自动 push 或 merge。
 
 这一顺序能够先固定安全契约，再实现外部行为。前三项已经形成 Git 检测→门禁→隔离验证的垂直切片；实现没有通过自动 stash、清理或覆盖来处理脏工作区。每个步骤都必须保持现有测试和多语言 fixture 基线不退化。
 
@@ -168,6 +168,8 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 第二切片已在 2026-10-28 完成本机验证：180 项测试覆盖 worktree 成功、失败、脏/未提交基线拒绝、模型异常、`KeyboardInterrupt`、构建超时、子目录映射和验证后写回；两个复杂 fixture 基线及源码编译继续通过。新提交仍需由 GitHub Actions 在 Windows/Linux 上独立确认。
 
 第三切片已在 2026-10-28 完成本机验证：189 项测试覆盖 plan v4 正常往返、Git SHA-1/SHA-256 object ID、HEAD/仓库/子路径漂移、脏工作区、diff 摘要篡改、unversioned 身份变化、规范化顺序和远端 URL 隐私；v1–v3 回归、复杂 fixture 基线及源码编译继续通过。
+
+第四切片已在 2026-10-28 完成本机验证：199 项测试覆盖 patch 确定性顺序、拒绝覆盖、字节摘要、`git apply --check`、commit 精确 pathspec、并发内容/索引变化、意外文件阻断和 CLI 端到端提交；Python/Node 复杂 fixture 基线、源码编译、workflow YAML 与 wheel 内容检查继续通过。commit 前再次核对 provenance、目标 bytes 和完整 Git 变更集合，保留 hooks，并明确不执行 push/merge。
 
 ## 8. 文档维护规则
 

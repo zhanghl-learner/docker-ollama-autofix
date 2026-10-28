@@ -182,9 +182,14 @@ def test_applies_and_verifies_successful_repair(tmp_path: Path) -> None:
     assert result.applied
     assert source.read_text(encoding="utf-8") == "value = 2\n"
     assert result.report_path is not None and result.report_path.is_file()
+    assert result.patch_path is not None and result.patch_path.is_file()
+    assert result.patch_sha256 is not None and len(result.patch_sha256) == 64
+    assert "--- a/value.py" in result.patch_path.read_text(encoding="utf-8")
     report = json.loads(result.report_path.read_text(encoding="utf-8"))
     assert report["succeeded"] is True
     assert report["changes"][0]["path"] == "value.py"
+    assert report["patch_path"] == str(result.patch_path)
+    assert report["patch_sha256"] == result.patch_sha256
 
 
 def test_import_only_model_output_is_merged_and_verified(tmp_path: Path) -> None:

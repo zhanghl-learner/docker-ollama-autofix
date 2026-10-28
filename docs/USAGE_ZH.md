@@ -149,6 +149,7 @@ autofix repair . --docker --max-attempts 3
 - 每个文件的 unified diff；
 - 已在 detached Git worktree（非 Git 项目为临时副本）中验证通过的结论；
 - `.autofix\plans\...json` 方案路径；
+- `.autofix\patches\...patch` 独立补丁及其 SHA-256；
 - 原项目未被修改的提示。
 
 确认 diff 后，应用同一个方案，不再请求模型：
@@ -156,6 +157,26 @@ autofix repair . --docker --max-attempts 3
 ```powershell
 autofix apply-plan ".\.autofix\plans\PLAN.json" --project .
 ```
+
+成功预览和成功应用都会生成普通 unified diff 补丁。需要固定位置供 CI 上传时，使用一个尚不存在的目标文件：
+
+```powershell
+autofix apply-plan ".\.autofix\plans\PLAN.json" --project . `
+  --patch-output ".\artifacts\verified-repair.patch"
+git apply --check ".\artifacts\verified-repair.patch"
+```
+
+AutoFix 不覆盖已有 patch。报告同时记录 patch 路径、patch 原始字节 SHA-256 和规范化 diff SHA-256；前者验证文件传输，后者绑定 plan 中的逻辑变更。
+
+若希望验证通过后创建本地提交，必须显式使用 `--commit`：
+
+```powershell
+autofix apply-plan ".\.autofix\plans\PLAN.json" --project . `
+  --commit `
+  --commit-message "fix: apply verified AutoFix repair"
+```
+
+提交前会再次检查仓库身份、HEAD、每个目标文件 bytes 和 Git 实际变更集合，只允许提交 plan 声明的现有 tracked 文件。提交使用精确 pathspec，并写入 `AutoFix-Diff-SHA256` trailer；Git hooks 不会被绕过。若 hook、用户身份或并发变更导致提交失败，已经验证的源码会保留供人工检查。该选项不执行 push、merge、stash、clean 或 amend。`repair` 的等价形式是 `autofix repair . --apply --commit`；预览模式拒绝 `--commit`。
 
 plan v4 会自动复用预览时的 Docker runner、镜像、网络策略、资源限制、超时和命令矩阵，并校验 Git 仓库指纹、基线 commit、项目子路径和最终 diff SHA-256。再次传入 `--docker` 只是可选的一致性断言，不再是启用 Docker 所必需。
 
@@ -400,6 +421,7 @@ autofix repair . --no-isolate
 ├── runs/               # run 的命令、输出、退出码和耗时
 ├── repairs/            # repair 的提议、拒绝原因、diff 和验证结果
 ├── plans/              # 已在隔离副本验证过的可应用方案
+├── patches/            # 可单独审查、传输和 git apply 的 unified diff
 ├── rollback-backups/   # 撤销前的当前文件备份
 └── rollbacks/          # 撤销回执
 ```

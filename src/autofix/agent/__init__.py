@@ -2,6 +2,12 @@
 
 from autofix.agent.ollama import FileChange, FileEdit, OllamaClient, OllamaError, RepairProposal
 from autofix.agent.diagnostics import RepairEnvironmentError, environment_failure
+from autofix.agent.artifacts import (
+    PatchArtifact,
+    RepairArtifactError,
+    render_standalone_patch,
+    save_standalone_patch,
+)
 from autofix.agent.plans import (
     PlanError,
     PlanProvenance,
@@ -29,11 +35,13 @@ __all__ = [
     "FileEdit",
     "OllamaClient",
     "OllamaError",
+    "PatchArtifact",
     "PlanError",
     "PlanProvenance",
     "RepairPlan",
     "RepairProposal",
     "RepairEnvironmentError",
+    "RepairArtifactError",
     "RepairResult",
     "RollbackError",
     "RollbackResult",
@@ -43,9 +51,11 @@ __all__ = [
     "load_repair_plan",
     "latest_rollback_candidate",
     "repair_project",
+    "render_standalone_patch",
     "environment_failure",
     "rollback_report",
     "rolled_back_reports",
     "save_repair_plan",
+    "save_standalone_patch",
 ]
 

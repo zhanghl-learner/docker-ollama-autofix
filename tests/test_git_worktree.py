@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-import string
 import shutil
+import string
 import subprocess
 import sys
 from pathlib import Path
@@ -10,10 +10,17 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from autofix.agent import FileChange, RepairProposal, repair_project
-from autofix.agent.patches import UnsafePatchError
+from autofix.agent import (
+    FileChange,
+    PlanProvenance,
+    RepairProposal,
+    repair_project,
+    save_repair_plan,
+)
+from autofix.agent.patches import UnsafePatchError, validate_changes
 from autofix.builders import BuildResult, run_build
 from autofix.cli import app
+from autofix.repository import inspect_git_workspace
 from autofix.models import BuildStep
 
 
@@ -135,6 +142,61 @@ def test_git_preview_runs_entire_build_loop_in_detached_subproject_worktree(
     assert len(report["diff_sha256"]) == 64
     assert set(report["diff_sha256"]) <= set(string.hexdigits.lower())
     assert "autofix-worktree-" not in json.dumps(report)
+
+
+def test_apply_plan_can_create_explicit_local_commit_without_push(
+    tmp_path: Path,
+) -> None:
+    repository, project, steps = _repository_project(tmp_path)
+    status = inspect_git_workspace(project)
+    proposal = RepairProposal(
+        "repair committed value",
+        (FileChange("value.py", "value = 2\n", "match required value"),),
+    )
+    plan = save_repair_plan(
+        project,
+        model="test",
+        summary=proposal.summary,
+        changes=validate_changes(project, proposal),
+        verification_steps=steps,
+        provenance=PlanProvenance(
+            "git",
+            status.repository_fingerprint,
+            status.head_commit,
+            status.project_subpath,
+        ),
+    )
+    baseline = status.head_commit
+    patch_output = project / "verified-repair.patch"
+
+    result = runner.invoke(
+        app,
+        [
+            "apply-plan",
+            str(plan),
+            "--project",
+            str(project),
+            "--commit",
+            "--commit-message",
+            "fix: verified service value",
+            "--patch-output",
+            str(patch_output),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "Created local commit:" in result.stdout
+    assert "No push or merge was performed" in result.stdout
+    assert _git(repository, "rev-parse", "HEAD") != baseline
+    assert _git(repository, "show", "--format=%s", "--no-patch", "HEAD") == (
+        "fix: verified service value"
+    )
+    assert _git(repository, "show", "--format=", "--name-only", "HEAD") == (
+        "service/value.py"
+    )
+    assert (project / "value.py").read_text(encoding="utf-8") == "value = 2\n"
+    assert patch_output.is_file()
+    assert "?? service/verified-repair.patch" in _git(repository, "status", "--short")
 
 
 def test_dirty_git_repository_stops_before_build_or_model(tmp_path: Path) -> None:

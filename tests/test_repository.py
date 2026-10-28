@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -9,7 +10,12 @@ import pytest
 from typer.testing import CliRunner
 
 from autofix.cli import app
-from autofix.repository import GitInspectionError, inspect_git_workspace
+from autofix.repository import (
+    GitCommitError,
+    GitInspectionError,
+    create_local_repair_commit,
+    inspect_git_workspace,
+)
 
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="Git is required")
@@ -155,3 +161,86 @@ def test_git_status_cli_json_and_clean_gate(tmp_path: Path) -> None:
 
     assert dirty.exit_code == 1
     assert json.loads(dirty.stdout)["direct_apply_policy"] == "blocked-dirty"
+
+
+def test_local_repair_commit_contains_only_verified_project_file(tmp_path: Path) -> None:
+    root = _clean_repository(tmp_path)
+    status = inspect_git_workspace(root)
+    repaired = b"value = 2\n"
+    (root / "tracked.py").write_bytes(repaired)
+    audit = root / ".autofix" / "patches" / "repair.patch"
+    audit.parent.mkdir(parents=True)
+    audit.write_text("audit only\n", encoding="utf-8")
+
+    commit_id = create_local_repair_commit(
+        root,
+        (("tracked.py", hashlib.sha256(repaired).hexdigest()),),
+        message="fix: verified value",
+        baseline_commit=status.head_commit or "",
+        repository_fingerprint=status.repository_fingerprint or "",
+        diff_sha256="a" * 64,
+    )
+
+    assert commit_id == _git(root, "rev-parse", "HEAD")
+    assert commit_id != status.head_commit
+    assert _git(root, "show", "--format=%s%n%b", "--no-patch", "HEAD") == (
+        "fix: verified value\nAutoFix-Diff-SHA256: " + "a" * 64
+    )
+    assert _git(root, "show", "--format=", "--name-only", "HEAD") == "tracked.py"
+    assert audit.is_file()
+
+
+def test_local_repair_commit_rejects_unexpected_worktree_change(tmp_path: Path) -> None:
+    root = _clean_repository(tmp_path)
+    status = inspect_git_workspace(root)
+    repaired = b"value = 2\n"
+    (root / "tracked.py").write_bytes(repaired)
+    (root / "unexpected.py").write_text("local = True\n", encoding="utf-8")
+
+    with pytest.raises(GitCommitError, match="unexpected changes"):
+        create_local_repair_commit(
+            root,
+            (("tracked.py", hashlib.sha256(repaired).hexdigest()),),
+            message="fix: verified value",
+            baseline_commit=status.head_commit or "",
+            repository_fingerprint=status.repository_fingerprint or "",
+            diff_sha256="b" * 64,
+        )
+
+    assert _git(root, "rev-parse", "HEAD") == status.head_commit
+
+
+def test_local_repair_commit_rejects_post_verification_file_change(tmp_path: Path) -> None:
+    root = _clean_repository(tmp_path)
+    status = inspect_git_workspace(root)
+    (root / "tracked.py").write_text("value = 3\n", encoding="utf-8")
+
+    with pytest.raises(GitCommitError, match="changed before local commit"):
+        create_local_repair_commit(
+            root,
+            (("tracked.py", hashlib.sha256(b"value = 2\n").hexdigest()),),
+            message="fix: verified value",
+            baseline_commit=status.head_commit or "",
+            repository_fingerprint=status.repository_fingerprint or "",
+            diff_sha256="c" * 64,
+        )
+
+
+def test_local_repair_commit_rejects_concurrent_index_change(tmp_path: Path) -> None:
+    root = _clean_repository(tmp_path)
+    status = inspect_git_workspace(root)
+    repaired = b"value = 2\n"
+    (root / "tracked.py").write_bytes(repaired)
+    _git(root, "add", "tracked.py")
+
+    with pytest.raises(GitCommitError, match="only unstaged modifications"):
+        create_local_repair_commit(
+            root,
+            (("tracked.py", hashlib.sha256(repaired).hexdigest()),),
+            message="fix: verified value",
+            baseline_commit=status.head_commit or "",
+            repository_fingerprint=status.repository_fingerprint or "",
+            diff_sha256="d" * 64,
+        )
+
+    assert _git(root, "rev-parse", "HEAD") == status.head_commit
