@@ -11,9 +11,19 @@ from pathlib import Path
 from typing import Any
 
 from autofix.agent.ollama import FileChange, RepairProposal
-from autofix.agent.patches import ValidatedChange, validate_changes
+from autofix.agent.patches import (
+    ValidatedChange,
+    validate_changes,
+    validated_diff_sha256,
+)
 from autofix.builders.docker import DockerConfig, DockerConfigurationError
 from autofix.models import BuildStep
+from autofix.repository import (
+    GitInspectionError,
+    GitWorktreeError,
+    inspect_git_workspace,
+    validate_git_repair_workspace,
+)
 
 
 class PlanError(ValueError):
@@ -33,6 +43,16 @@ class PlannedChange:
 
 
 @dataclass(frozen=True)
+class PlanProvenance:
+    """Source-control identity bound to a verified repair plan."""
+
+    kind: str
+    repository_fingerprint: str | None = None
+    baseline_commit: str | None = None
+    project_subpath: str | None = None
+
+
+@dataclass(frozen=True)
 class RepairPlan:
     """A reviewed repair plus the exact policy used to verify it."""
 
@@ -46,9 +66,11 @@ class RepairPlan:
     verification_runner: str | None = None
     verification_timeout_seconds: float | None = None
     docker_config: DockerConfig | None = None
+    provenance: PlanProvenance | None = None
+    diff_sha256: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize the plan while preserving v1/v2 compatibility."""
+        """Serialize the plan while preserving v1-v3 compatibility."""
 
         data: dict[str, Any] = {
             "format": "autofix-repair-plan",
@@ -68,6 +90,9 @@ class RepairPlan:
                 if self.docker_config is not None:
                     verification["docker"] = asdict(self.docker_config)
             data["verification"] = verification
+        if self.version >= 4:
+            data["provenance"] = asdict(self.provenance) if self.provenance else None
+            data["diff_sha256"] = self.diff_sha256
         return data
 
     def to_proposal(self) -> RepairProposal:
@@ -86,6 +111,92 @@ def _digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def _is_sha256(value: object) -> bool:
+    """Return whether a value is a lowercase hexadecimal SHA-256 string."""
+
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
+def _is_git_object_id(value: object) -> bool:
+    """Accept full object IDs from SHA-1 and SHA-256 Git repositories."""
+
+    return (
+        isinstance(value, str)
+        and len(value) in {40, 64}
+        and all(char in "0123456789abcdef" for char in value)
+    )
+
+
+def _validate_provenance(provenance: PlanProvenance) -> None:
+    """Validate the strict v4 provenance shape before it is persisted."""
+
+    if provenance.kind == "git":
+        if not _is_sha256(provenance.repository_fingerprint):
+            raise PlanError("Git provenance requires a repository fingerprint")
+        if not _is_git_object_id(provenance.baseline_commit):
+            raise PlanError("Git provenance requires a baseline commit")
+        if not isinstance(provenance.project_subpath, str) or not provenance.project_subpath:
+            raise PlanError("Git provenance requires a project subpath")
+        relative = Path(provenance.project_subpath)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise PlanError("Git provenance has an unsafe project subpath")
+        return
+    if provenance.kind == "unversioned":
+        if any(
+            value is not None
+            for value in (
+                provenance.repository_fingerprint,
+                provenance.baseline_commit,
+                provenance.project_subpath,
+            )
+        ):
+            raise PlanError("Unversioned provenance cannot contain Git identity")
+        return
+    raise PlanError("Plan provenance kind must be git or unversioned")
+
+
+def _load_provenance(raw: object) -> PlanProvenance:
+    """Parse strict provenance metadata from a v4 plan."""
+
+    keys = {"kind", "repository_fingerprint", "baseline_commit", "project_subpath"}
+    if not isinstance(raw, dict) or set(raw) != keys:
+        raise PlanError("Repair plan has invalid provenance metadata")
+    provenance = PlanProvenance(
+        raw["kind"],
+        raw["repository_fingerprint"],
+        raw["baseline_commit"],
+        raw["project_subpath"],
+    )
+    _validate_provenance(provenance)
+    return provenance
+
+
+def _verify_provenance(root: Path, provenance: PlanProvenance) -> None:
+    """Reject applying a plan outside the exact source-control baseline."""
+
+    try:
+        if provenance.kind == "git":
+            status = validate_git_repair_workspace(root)
+            if not status.is_repository:
+                raise PlanError("Git-bound repair plan requires a Git repository")
+            if status.repository_fingerprint != provenance.repository_fingerprint:
+                raise PlanError("Git repository identity differs from the reviewed plan")
+            if status.head_commit != provenance.baseline_commit:
+                raise PlanError("Git HEAD differs from the reviewed plan baseline")
+            if status.project_subpath != provenance.project_subpath:
+                raise PlanError("Project subpath differs from the reviewed plan")
+        else:
+            status = inspect_git_workspace(root)
+            if status.is_repository:
+                raise PlanError("Unversioned repair plan cannot be applied in a Git repository")
+    except (GitInspectionError, GitWorktreeError) as exc:
+        raise PlanError(f"Unable to verify plan provenance: {exc}") from exc
+
+
 def save_repair_plan(
     root: Path | str,
     *,
@@ -96,6 +207,7 @@ def save_repair_plan(
     verification_runner: str = "local",
     verification_timeout_seconds: float = 300,
     docker_config: DockerConfig | None = None,
+    provenance: PlanProvenance | None = None,
 ) -> Path:
     """Write a deterministic plan for changes that already passed verification."""
 
@@ -123,6 +235,10 @@ def save_repair_plan(
         raise PlanError("Docker verification requires a Docker configuration")
     if verification_runner == "local" and docker_config is not None:
         raise PlanError("Local verification cannot include a Docker configuration")
+    if provenance is not None:
+        if verification_steps is None:
+            raise PlanError("Plan provenance requires bound verification steps")
+        _validate_provenance(provenance)
     created_at = datetime.now(timezone.utc).isoformat()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     plan_dir = project_root / ".autofix" / "plans"
@@ -137,7 +253,11 @@ def save_repair_plan(
         )
         for change in changes
     )
-    version = 3 if verification_steps is not None else 1
+    version = 1
+    if verification_steps is not None:
+        version = 3
+    if provenance is not None:
+        version = 4
     plan = RepairPlan(
         path,
         created_at,
@@ -151,6 +271,8 @@ def save_repair_plan(
             float(verification_timeout_seconds) if verification_steps is not None else None
         ),
         docker_config=docker_config,
+        provenance=provenance,
+        diff_sha256=(validated_diff_sha256(changes) if provenance is not None else None),
     )
     path.write_text(
         json.dumps(plan.to_dict(), ensure_ascii=False, indent=2) + "\n",
@@ -179,7 +301,7 @@ def load_repair_plan(
         not isinstance(data, dict)
         or data.get("format") != "autofix-repair-plan"
         or type(version) is not int
-        or version not in (1, 2, 3)
+        or version not in (1, 2, 3, 4)
     ):
         raise PlanError("Unsupported repair plan")
     created_at, model, summary, raw_changes = (
@@ -206,7 +328,7 @@ def load_repair_plan(
     verification_runner: str | None = None
     verification_timeout_seconds: float | None = None
     docker_config: DockerConfig | None = None
-    if version in (2, 3):
+    if version >= 2:
         raw_verification = data.get("verification")
         expected_keys = (
             {"steps"}
@@ -217,7 +339,7 @@ def load_repair_plan(
             raw_verification
         ):
             raise PlanError("Repair plan has invalid verification metadata")
-        allowed_keys = expected_keys | ({"docker"} if version == 3 else set())
+        allowed_keys = expected_keys | ({"docker"} if version >= 3 else set())
         if set(raw_verification) - allowed_keys:
             raise PlanError("Repair plan has invalid verification metadata")
         raw_steps = raw_verification["steps"]
@@ -238,7 +360,7 @@ def load_repair_plan(
                 raise PlanError("Repair plan verification argv must contain non-empty strings")
             parsed_steps.append(BuildStep(label, tuple(argv)))
         verification_steps = tuple(parsed_steps)
-        if version == 3:
+        if version >= 3:
             verification_runner = raw_verification["runner"]
             if not isinstance(verification_runner, str) or verification_runner not in {
                 "local",
@@ -279,6 +401,14 @@ def load_repair_plan(
                     docker_config = DockerConfig(**raw_docker)
                 except (DockerConfigurationError, TypeError) as exc:
                     raise PlanError(f"Docker repair plan has invalid settings: {exc}") from exc
+    provenance: PlanProvenance | None = None
+    expected_diff_sha256: str | None = None
+    if version >= 4:
+        provenance = _load_provenance(data.get("provenance"))
+        expected_diff_sha256 = data.get("diff_sha256")
+        if not _is_sha256(expected_diff_sha256):
+            raise PlanError("Repair plan has an invalid diff SHA-256")
+        _verify_provenance(project_root, provenance)
     plan = RepairPlan(
         plan_path,
         created_at,
@@ -290,6 +420,8 @@ def load_repair_plan(
         verification_runner=verification_runner,
         verification_timeout_seconds=verification_timeout_seconds,
         docker_config=docker_config,
+        provenance=provenance,
+        diff_sha256=expected_diff_sha256,
     )
     try:
         changes = validate_changes(
@@ -305,4 +437,9 @@ def load_repair_plan(
         expected = expected_hashes[change.relative_path]
         if _digest(change.path.read_bytes()) != expected:
             raise PlanError(f"Project file changed since preview: {change.relative_path}")
+    if (
+        expected_diff_sha256 is not None
+        and validated_diff_sha256(changes) != expected_diff_sha256
+    ):
+        raise PlanError("Repair plan diff SHA-256 does not match its validated changes")
     return plan, changes

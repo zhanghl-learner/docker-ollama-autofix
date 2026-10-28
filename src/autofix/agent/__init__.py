@@ -2,7 +2,13 @@
 
 from autofix.agent.ollama import FileChange, FileEdit, OllamaClient, OllamaError, RepairProposal
 from autofix.agent.diagnostics import RepairEnvironmentError, environment_failure
-from autofix.agent.plans import PlanError, RepairPlan, load_repair_plan, save_repair_plan
+from autofix.agent.plans import (
+    PlanError,
+    PlanProvenance,
+    RepairPlan,
+    load_repair_plan,
+    save_repair_plan,
+)
 from autofix.agent.patches import UnsafePatchError
 from autofix.agent.repair import (
     ProposalRejection,
@@ -24,6 +30,7 @@ __all__ = [
     "OllamaClient",
     "OllamaError",
     "PlanError",
+    "PlanProvenance",
     "RepairPlan",
     "RepairProposal",
     "RepairEnvironmentError",

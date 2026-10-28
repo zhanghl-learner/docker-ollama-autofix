@@ -21,6 +21,7 @@ from autofix.agent.patches import (
     apply_changes,
     restore_files,
     validate_changes,
+    validated_diff_sha256,
 )
 from autofix.agent.textio import read_utf8_exact
 from autofix.builders import BuildResult, run_build
@@ -90,6 +91,8 @@ class RepairResult:
     workspace_kind: str = "original"
     repository_root: Path | None = None
     baseline_commit: str | None = None
+    repository_fingerprint: str | None = None
+    project_subpath: str | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -114,7 +117,12 @@ class RepairResult:
                     str(self.repository_root) if self.repository_root else None
                 ),
                 "baseline_commit": self.baseline_commit,
+                "repository_fingerprint": self.repository_fingerprint,
+                "project_subpath": self.project_subpath,
             },
+            "diff_sha256": (
+                validated_diff_sha256(self.changes) if self.changes else None
+            ),
             "initial_build": self.initial_build.to_dict(),
             "final_build": self.final_build.to_dict(),
             "proposals": [
@@ -411,6 +419,8 @@ def repair_project(
             workspace_kind=workspace_kind,
             repository_root=git_status.repository_root,
             baseline_commit=git_status.head_commit,
+            repository_fingerprint=git_status.repository_fingerprint,
+            project_subpath=git_status.project_subpath,
         )
         if save_report:
             result = replace(result, report_path=_save_repair_report(root, result))
@@ -430,6 +440,8 @@ def repair_project(
             workspace_kind=workspace_kind,
             repository_root=git_status.repository_root,
             baseline_commit=git_status.head_commit,
+            repository_fingerprint=git_status.repository_fingerprint,
+            project_subpath=git_status.project_subpath,
         )
         if save_report:
             result = replace(
@@ -476,6 +488,8 @@ def repair_project(
             workspace_kind=workspace_kind,
             repository_root=git_status.repository_root,
             baseline_commit=git_status.head_commit,
+            repository_fingerprint=git_status.repository_fingerprint,
+            project_subpath=git_status.project_subpath,
         )
         if save_report:
             result = replace(

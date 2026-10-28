@@ -15,6 +15,7 @@ from autofix.agent import (
     OllamaClient,
     OllamaError,
     PlanError,
+    PlanProvenance,
     RepairEnvironmentError,
     RollbackError,
     latest_rollback_candidate,
@@ -1228,6 +1229,16 @@ def repair(
             verification_runner="docker" if docker else "local",
             verification_timeout_seconds=timeout,
             docker_config=plan_docker_config,
+            provenance=(
+                PlanProvenance(
+                    "git",
+                    result.repository_fingerprint,
+                    result.baseline_commit,
+                    result.project_subpath,
+                )
+                if result.repository_root is not None
+                else PlanProvenance("unversioned")
+            ),
         )
         console.print(f"Repair plan: {plan_path}")
         location = (

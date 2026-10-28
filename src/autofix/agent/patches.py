@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ast
 import difflib
+import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -156,6 +158,19 @@ class ValidatedChange:
                 tofile=f"b/{self.relative_path}",
             )
         )
+
+
+def validated_diff_sha256(changes: tuple[ValidatedChange, ...]) -> str:
+    """Hash a canonical ordered representation of the final reviewable diffs."""
+
+    records = [
+        {"path": change.relative_path, "diff": change.diff}
+        for change in sorted(changes, key=lambda item: item.relative_path)
+    ]
+    payload = json.dumps(
+        records, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _validate_line_edits(

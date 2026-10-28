@@ -60,14 +60,14 @@ autofix apply-plan PLAN.json --project examples\multilang-validation\python --do
 autofix undo examples\multilang-validation\python
 ```
 
-在当前 plan v3 流程中，应先用 `autofix repair ... --docker` 生成绑定 Docker 策略的 plan；应用时可省略 `--docker`：
+在当前 plan v4 流程中，应先用 `autofix repair ... --docker` 生成绑定 Git provenance 与 Docker 策略的 plan；应用时可省略 `--docker`：
 
 ```powershell
 autofix repair examples\multilang-validation\python --docker --max-attempts 3
 autofix apply-plan PLAN.json --project examples\multilang-validation\python
 ```
 
-此处的 v3 策略继承与漂移拒绝由 CLI 集成测试覆盖；不要把旧的本地 v1/v2 plan 手工改版本后当作 Docker v3 plan。
+此处的 v3 执行策略继承与 v4 provenance 漂移拒绝由集成测试覆盖；不要手工修改旧 plan 的版本号来伪造新格式保证。
 
 Docker 受限验证通过。undo 后 `calculator.py` 的 SHA-256 与应用前完全一致：
 

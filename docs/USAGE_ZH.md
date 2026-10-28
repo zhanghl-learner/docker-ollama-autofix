@@ -135,6 +135,8 @@ autofix run . --docker
 
 `repair` 和 `apply-plan` 对 Git 项目强制使用已提交的干净基线：脏工作区或尚无 commit 的仓库会在构建、Ollama 请求和源码修改前停止，AutoFix 不会自动 stash、clean 或提交。干净仓库会从当前 HEAD 创建 detached 临时 worktree，初始失败复现、模型编辑和完整验证都在其中完成；成功预览只输出 plan，成功 `--apply` 才在字节级并发检查后写回已验证目标文件。非 Git 项目继续使用临时目录副本。
 
+建议把 `.autofix/` 加入项目 `.gitignore`。即使尚未加入，repair 策略也只会忽略“当前项目 `.autofix/` 下的未跟踪审计产物”，避免 AutoFix 被自己的报告阻塞；`git-status` 仍会如实显示工作区 dirty。其他未跟踪文件、`.autofix` 中已经被 Git 跟踪的修改，以及仓库其他目录的修改仍会阻断 repair。
+
 如果 `run` 已通过，项目没有需要修复的已知构建错误。如果失败，执行安全预览：
 
 ```powershell
@@ -155,7 +157,7 @@ autofix repair . --docker --max-attempts 3
 autofix apply-plan ".\.autofix\plans\PLAN.json" --project .
 ```
 
-plan v3 会自动复用预览时的 Docker runner、镜像、网络策略、资源限制、超时和命令矩阵。再次传入 `--docker` 只是可选的一致性断言，不再是启用 Docker 所必需。
+plan v4 会自动复用预览时的 Docker runner、镜像、网络策略、资源限制、超时和命令矩阵，并校验 Git 仓库指纹、基线 commit、项目子路径和最终 diff SHA-256。再次传入 `--docker` 只是可选的一致性断言，不再是启用 Docker 所必需。
 
 然后再次独立验证：
 
@@ -402,7 +404,9 @@ autofix repair . --no-isolate
 └── rollbacks/          # 撤销回执
 ```
 
-方案包含目标文件的完整替换结果、预览时原文件的 SHA-256，以及当时真正通过的有序验证策略。plan v3 绑定步骤、local/Docker runner、每步超时，以及 Docker 镜像、CPU、内存、PID 与网络策略。若预览后人工编辑过文件，`apply-plan` 会停止并报告 `Project file changed since preview`，以免覆盖新工作。若之后修改 `autofix.yml`，应用仍使用已审核方案绑定的策略，不会静默换成新的、更弱的门禁。
+方案包含目标文件的完整替换结果、预览时原文件的 SHA-256，以及当时真正通过的有序验证策略。plan v4 继承 v3 的步骤、local/Docker runner、每步超时和 Docker 资源策略，并新增 provenance：Git 仓库指纹、基线 commit、项目子路径与最终 diff SHA-256。仓库指纹是 origin 标识（无 origin 时为根提交集合）的 SHA-256，不保存远端 URL 明文。它用于一致性校验，不是数字签名，能够自行重写 plan 的攻击者仍可重新计算摘要。
+
+若预览后人工编辑文件、推进 HEAD、切换到另一仓库或改变项目根路径，`apply-plan` 会在修改源码前停止。若之后只修改 `autofix.yml`，应用仍使用已审核方案绑定的验证策略，不会静默换成新的、更弱门禁。
 
 可重复传入 `--step` 作为调用方的预期确认；所有 argv 必须与 plan 一致，否则在修改源码前停止：
 
@@ -412,9 +416,9 @@ autofix apply-plan ".\.autofix\plans\PLAN.json" --project . `
   --step "python -m pytest"
 ```
 
-`apply-plan` 无须重复指定 `--docker` 或资源参数；v3 默认自动复用预览策略。也可以显式传入 `--docker`、`--local`、`--timeout` 或 Docker 资源选项作为一致性断言，值不同就拒绝执行。
+`apply-plan` 无须重复指定 `--docker` 或资源参数；v4 默认自动复用预览策略。也可以显式传入 `--docker`、`--local`、`--timeout` 或 Docker 资源选项作为一致性断言，值不同就拒绝执行。
 
-旧的 plan v1 仍可应用，但它没有绑定验证步骤，会回退当前配置。plan v2 会复用命令，但没有绑定 runner 和资源策略，会回退 CLI 运行参数。两种旧格式都会显示黄色警告；对重要项目建议重新运行 preview 生成 v3 plan。
+旧 plan v1 没有绑定验证步骤；v2 绑定步骤但未绑定 runner；v3 绑定完整执行策略，但没有 Git provenance 与最终 diff 摘要。读取器继续兼容这些格式并保留相应警告；对重要项目建议重新运行 preview 生成 v4 plan。
 
 查看及撤销：
 

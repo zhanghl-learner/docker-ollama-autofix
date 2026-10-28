@@ -9,7 +9,7 @@ import pytest
 from typer.testing import CliRunner
 
 from autofix.cli import app
-from autofix.repository import inspect_git_workspace
+from autofix.repository import GitInspectionError, inspect_git_workspace
 
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="Git is required")
@@ -48,6 +48,18 @@ def test_non_repository_is_reported_without_error(tmp_path: Path) -> None:
     assert status.direct_apply_policy == "unversioned"
 
 
+def test_git_marker_without_executable_is_not_treated_as_unversioned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = tmp_path / "repository" / "service"
+    project.mkdir(parents=True)
+    (tmp_path / "repository" / ".git").mkdir()
+    monkeypatch.setattr("autofix.repository.find_executable", lambda _: None)
+
+    with pytest.raises(GitInspectionError, match="Git executable is unavailable"):
+        inspect_git_workspace(project)
+
+
 def test_clean_repository_records_branch_and_baseline_commit(tmp_path: Path) -> None:
     root = _clean_repository(tmp_path)
 
@@ -56,6 +68,9 @@ def test_clean_repository_records_branch_and_baseline_commit(tmp_path: Path) -> 
     assert status.clean is True
     assert status.branch in {"main", "master"}
     assert status.head_commit == _git(root, "rev-parse", "HEAD")
+    assert status.repository_fingerprint is not None
+    assert len(status.repository_fingerprint) == 64
+    assert status.project_subpath == "."
     assert status.direct_apply_policy == "allowed"
     assert status.changes == ()
 
@@ -86,6 +101,22 @@ def test_dirty_repository_distinguishes_tracked_and_untracked_paths(tmp_path: Pa
         (" M", "tracked.py"),
         ("??", "new.py"),
     }
+
+
+def test_untracked_project_autofix_artifacts_do_not_block_repair_policy(
+    tmp_path: Path,
+) -> None:
+    root = _clean_repository(tmp_path)
+    report = root / ".autofix" / "runs" / "report.json"
+    report.parent.mkdir(parents=True)
+    report.write_text("{}\n", encoding="utf-8")
+
+    status = inspect_git_workspace(root)
+
+    assert status.state == "dirty"
+    assert status.clean is False
+    assert status.blocking_changes == ()
+    assert status.direct_apply_policy == "allowed"
 
 
 def test_detached_head_retains_commit_identity(tmp_path: Path) -> None:

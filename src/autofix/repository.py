@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -55,6 +56,8 @@ class GitWorkspaceStatus:
     head_commit: str | None = None
     detached: bool = False
     changes: tuple[GitChange, ...] = ()
+    repository_fingerprint: str | None = None
+    project_subpath: str | None = None
 
     @property
     def is_repository(self) -> bool:
@@ -67,6 +70,18 @@ class GitWorkspaceStatus:
         """Return whether a repository has no tracked or untracked changes."""
 
         return self.is_repository and not self.changes
+
+    @property
+    def blocking_changes(self) -> tuple[GitChange, ...]:
+        """Return changes that may contain user work and must block repair."""
+
+        prefix = "" if self.project_subpath in {None, "."} else f"{self.project_subpath}/"
+        artifact_prefix = f"{prefix}.autofix/"
+        return tuple(
+            change
+            for change in self.changes
+            if not (change.untracked and change.path.startswith(artifact_prefix))
+        )
 
     @property
     def state(self) -> str:
@@ -88,7 +103,7 @@ class GitWorkspaceStatus:
             return "unversioned"
         if self.head_commit is None:
             return "blocked-unborn"
-        return "allowed" if self.clean else "blocked-dirty"
+        return "allowed" if not self.blocking_changes else "blocked-dirty"
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize repository identity without mutating or refreshing Git state."""
@@ -104,6 +119,11 @@ class GitWorkspaceStatus:
             "clean": self.clean,
             "state": self.state,
             "direct_apply_policy": self.direct_apply_policy,
+            "repository_fingerprint": self.repository_fingerprint,
+            "project_subpath": self.project_subpath,
+            "blocking_changes": [
+                change.to_dict() for change in self.blocking_changes
+            ],
             "changes": [change.to_dict() for change in self.changes],
         }
 
@@ -220,12 +240,46 @@ def _parse_porcelain(output: str) -> tuple[GitChange, ...]:
     return tuple(changes)
 
 
+def _find_git_marker(path: Path) -> Path | None:
+    """Find a parent .git directory/file when the Git executable is unavailable."""
+
+    for candidate in (path, *path.parents):
+        marker = candidate / ".git"
+        if marker.exists():
+            return marker
+    return None
+
+
+def _repository_fingerprint(git: str, root: Path) -> str:
+    """Hash repository lineage without persisting a remote URL or local path."""
+
+    remote = _run_git(git, root, "config", "--get", "remote.origin.url")
+    if remote.returncode == 0 and remote.stdout.strip():
+        identity = "origin\0" + remote.stdout.strip()
+    else:
+        roots = _required_output(
+            git,
+            root,
+            "rev-list",
+            "--max-parents=0",
+            "HEAD",
+            operation="read Git root commits",
+        )
+        identity = "roots\0" + "\n".join(sorted(roots.splitlines()))
+    return hashlib.sha256(identity.encode("utf-8", errors="surrogateescape")).hexdigest()
+
+
 def inspect_git_workspace(path: Path | str) -> GitWorkspaceStatus:
     """Inspect repository identity and worktree changes without modifying Git."""
 
     requested = Path(path).expanduser().resolve()
     git = find_executable("git")
     if git is None:
+        marker = _find_git_marker(requested)
+        if marker is not None:
+            raise GitInspectionError(
+                f"Git metadata exists at {marker}, but the Git executable is unavailable"
+            )
         return GitWorkspaceStatus(requested, False)
 
     top_level = _run_git(git, requested, "rev-parse", "--show-toplevel")
@@ -254,6 +308,12 @@ def inspect_git_workspace(path: Path | str) -> GitWorkspaceStatus:
         "--untracked-files=all",
         operation="read Git worktree status",
     )
+    try:
+        relative_project = requested.relative_to(repository_root)
+    except ValueError as exc:
+        raise GitInspectionError(
+            "Git reported a repository root that does not contain the requested project"
+        ) from exc
     return GitWorkspaceStatus(
         requested_root=requested,
         git_available=True,
@@ -262,6 +322,10 @@ def inspect_git_workspace(path: Path | str) -> GitWorkspaceStatus:
         head_commit=head_commit,
         detached=head_commit is not None and branch is None,
         changes=_parse_porcelain(status_output),
+        repository_fingerprint=(
+            _repository_fingerprint(git, repository_root) if head_commit else None
+        ),
+        project_subpath=relative_project.as_posix() if relative_project.parts else ".",
     )
 
 
@@ -272,8 +336,8 @@ def validate_git_repair_workspace(path: Path | str) -> GitWorkspaceStatus:
     if not status.is_repository or status.direct_apply_policy == "allowed":
         return status
     if status.direct_apply_policy == "blocked-dirty":
-        changed = ", ".join(change.path for change in status.changes[:5])
-        suffix = " ..." if len(status.changes) > 5 else ""
+        changed = ", ".join(change.path for change in status.blocking_changes[:5])
+        suffix = " ..." if len(status.blocking_changes) > 5 else ""
         detail = f" Changed paths: {changed}{suffix}." if changed else ""
         raise GitWorktreeError(
             "Git worktree is dirty; AutoFix will not stash, clean, or overwrite "

@@ -25,7 +25,7 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 | Docker | Python 专用镜像下的离线、受限验证 | 容器是恶意项目的强安全沙箱 |
 | 复杂评测 | Python、Node 两个多文件边界用例 | 两个样例代表实际总体成功率 |
 | 模型比较 | `qwen3:0.6b` 为 0/2；`qwen2.5-coder:7b` 为 2/2 | 更大模型一定正确或没有回归 |
-| 可恢复性 | preview、plan v3、apply、history、rollback、undo | 可以替代 Git 和人工审查 |
+| 可恢复性 | preview、plan v4、apply、history、rollback、undo | 可以替代 Git 和人工审查 |
 
 发布或简历表述必须区分自动测试、真实模型运行和合成环境错误测试。不得把“构建通过”扩写为“业务、安全或生产验证通过”。
 
@@ -158,14 +158,16 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 1. [x] 定义只读 `GitWorkspaceStatus` / `GitChange` 数据模型和 direct-apply 策略；新增 `autofix git-status`，不修改 Git 或源码；
 2. [x] 覆盖非 Git、干净 Git、tracked/untracked 脏工作区和 detached HEAD；CI 使用 `--require-clean` 验证干净检出契约；
 3. [x] 在 preview/default-isolate 路径接入 detached worktree；基线、编辑和验证均不在原工作树运行，失败、异常和取消路径清理注册项；
-4. [ ] repair report v2 已记录基线 commit 与 workspace 类型；下一步把 Git 身份和最终 diff hash 绑定到 plan，并完成读取兼容策略；
-5. 最后才开放显式 apply/commit，并保留人工确认边界。
+4. [x] repair report v2 与 plan v4 记录仓库指纹、基线 commit、项目子路径和最终 diff SHA-256；v1–v3 继续兼容读取；
+5. [ ] 输出独立 patch 与可选本地 commit，并保留人工确认边界；不自动 push 或 merge。
 
 这一顺序能够先固定安全契约，再实现外部行为。前三项已经形成 Git 检测→门禁→隔离验证的垂直切片；实现没有通过自动 stash、清理或覆盖来处理脏工作区。每个步骤都必须保持现有测试和多语言 fixture 基线不退化。
 
 第一切片已在 2026-10-28 完成本机验证：171 项测试、两个复杂 fixture 基线、源码编译和 wheel 内容检查通过；GitHub Actions 结果需在推送本次提交后单独记录，不能沿用上一次提交的绿色状态。
 
 第二切片已在 2026-10-28 完成本机验证：180 项测试覆盖 worktree 成功、失败、脏/未提交基线拒绝、模型异常、`KeyboardInterrupt`、构建超时、子目录映射和验证后写回；两个复杂 fixture 基线及源码编译继续通过。新提交仍需由 GitHub Actions 在 Windows/Linux 上独立确认。
+
+第三切片已在 2026-10-28 完成本机验证：189 项测试覆盖 plan v4 正常往返、Git SHA-1/SHA-256 object ID、HEAD/仓库/子路径漂移、脏工作区、diff 摘要篡改、unversioned 身份变化、规范化顺序和远端 URL 隐私；v1–v3 回归、复杂 fixture 基线及源码编译继续通过。
 
 ## 8. 文档维护规则
 

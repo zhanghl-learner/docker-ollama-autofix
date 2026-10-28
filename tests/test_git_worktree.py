@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import string
 import shutil
 import subprocess
 import sys
@@ -129,6 +130,10 @@ def test_git_preview_runs_entire_build_loop_in_detached_subproject_worktree(
     assert report["root"] == str(project.resolve())
     assert report["workspace"]["kind"] == "git-worktree"
     assert report["workspace"]["baseline_commit"] == result.baseline_commit
+    assert report["workspace"]["repository_fingerprint"] == result.repository_fingerprint
+    assert report["workspace"]["project_subpath"] == "service"
+    assert len(report["diff_sha256"]) == 64
+    assert set(report["diff_sha256"]) <= set(string.hexdigits.lower())
     assert "autofix-worktree-" not in json.dumps(report)
 
 

@@ -41,7 +41,7 @@ flowchart TB
         STEPS[BuildStep 矩阵<br/>models.py]
         REPAIR[修复状态机<br/>agent/repair.py]
         DIAG[环境故障门禁<br/>agent/diagnostics.py]
-        PLAN[确定性 plan v3<br/>agent/plans.py]
+        PLAN[Git/策略绑定 plan v4<br/>agent/plans.py]
         ROLLBACK[撤销与回执<br/>agent/rollback.py]
         EVALUATION[可重复评测<br/>evaluation.py]
     end
@@ -150,6 +150,8 @@ src/autofix/
 `inspect_git_workspace()` 只调用无 shell、带超时的 Git 元数据命令。仓库根目录来自 `git rev-parse --show-toplevel`，分支使用 `symbolic-ref`，HEAD 使用 `rev-parse --verify HEAD`，变更使用 NUL 分隔的 `status --porcelain=v1 -z --untracked-files=all`。NUL 格式避免空格、引号和换行路径造成普通行解析歧义；解析器保留状态码前导空格，并记录 rename/copy 的原路径。
 
 `GitWorkspaceStatus` 明确区分 `git-unavailable`、`not-repository`、`clean` 和 `dirty`。有基线 commit 的干净仓库为 `allowed`，脏仓库为 `blocked-dirty`，尚无 commit 的仓库为 `blocked-unborn`，非 Git 项目为 `unversioned`。CLI 在创建 Ollama 客户端前执行同一策略；核心 API 再次校验，避免其他调用方绕过门禁。
+
+状态模型保留完整 porcelain `changes`，所以 `git-status` 不会伪报 Git clean。repair 的 `blocking_changes` 仅排除当前项目 `.autofix/` 下的 `??` 未跟踪审计产物，避免 run/repair 生成的报告反过来阻塞 apply-plan；tracked `.autofix` 修改和所有其他路径仍然阻断。检测到 `.git` 标记但找不到 Git 可执行文件时明确停止，不降级为 unversioned。
 
 `create_detached_worktree()` 从已记录的 HEAD commit 创建无分支临时 worktree。若用户传入仓库子目录，repair 使用 worktree 中对应的相对子目录。基线构建、上下文读取、模型编辑和验证都发生在 worktree；成功 `--apply` 仍通过原文件 bytes 检查和 `ValidatedChange` 写回，不执行 commit、push 或 merge。正常、验证失败、模型异常和 `KeyboardInterrupt` 都会执行定向 `git worktree remove --force`；清理失败会明确要求检查注册项，但不会自动全局 prune 用户的其他 worktree。
 
@@ -466,7 +468,7 @@ sequenceDiagram
             end
         end
         alt 完整矩阵通过
-            C->>A: 写 repair 报告与 plan v3
+            C->>A: 写 repair report v2 与 plan v4
             C-->>U: 显示 diff，原项目不变
         else 所有尝试失败
             C->>A: 写失败报告
@@ -491,18 +493,18 @@ sequenceDiagram
 
 隔离成功后，代码逐文件把“原始项目内容”和“隔离工作区最终内容”合并为 `ValidatedChange`。若要应用，会比较修复开始时保存的原始 bytes 与当前目标 bytes；任一文件在期间被编辑，就抛出错误而不是覆盖并发工作。
 
-repair report v2 的 `workspace` 记录 `kind`、`repository_root` 和 `baseline_commit`。报告中的项目/build root 统一指向真实项目，不泄露或引用已经删除的临时路径。plan 对 Git 基线和最终 diff digest 的绑定仍属于下一切片。
+repair report v2 的 `workspace` 记录 `kind`、`repository_root`、仓库指纹、`baseline_commit` 和项目子路径，顶层 `diff_sha256` 记录规范化最终 diff 摘要。报告中的项目/build root 统一指向真实项目，不泄露或引用已经删除的临时路径。
 
 直接模式会在首次修改前保存 bytes。异常或最终验证失败时默认恢复所有备份；只有显式 `--keep-failed` 才保留失败修改。
 
 ## 13. Repair plan 的确定性
 
-预览成功后，`plans.py` 保存格式版本 3：
+预览成功后，`plans.py` 保存格式版本 4：
 
 ```json
 {
   "format": "autofix-repair-plan",
-  "version": 3,
+  "version": 4,
   "created_at": "...",
   "model": "qwen3:0.6b",
   "summary": "...",
@@ -528,22 +530,33 @@ repair report v2 的 `workspace` 记录 `kind`、`repository_root` 和 `baseline
       "pids_limit": 256,
       "allow_network": false
     }
-  }
+  },
+  "provenance": {
+    "kind": "git",
+    "repository_fingerprint": "...64 hex...",
+    "baseline_commit": "...full Git object id...",
+    "project_subpath": "."
+  },
+  "diff_sha256": "...64 hex..."
 }
 ```
 
-`apply-plan` 不再次调用 Ollama。加载时重新执行完整的路径、文件类型、测试保护和破坏性校验，再比较当前文件 SHA-256 与 `original_sha256`。任何差异都会停止。v3 的 `verification` 保存预览真正通过的无 shell argv、local/Docker runner、每步超时，并在 Docker 模式保存镜像、CPU、内存、PID 与网络策略。应用直接复用这些值，不重新从可能已变化的配置推导。显式 `--step`、`--docker/--local`、`--timeout` 和 Docker 选项只作为一致性断言；不一致时拒绝执行。随后它把 plan 适配成单次 `RepairClient` 提议，复用同一个 repair 验证与隔离提交路径，避免形成另一套不一致的应用逻辑。
+`apply-plan` 不再次调用 Ollama。加载时先校验 provenance，再执行完整的路径、文件类型、测试保护和破坏性校验，比较当前文件 SHA-256 与 `original_sha256`，最后重建规范化 diff 并核对 `diff_sha256`。任何差异都会停止。v4 继承 v3 的 `verification`：保存预览真正通过的无 shell argv、local/Docker runner、每步超时，并在 Docker 模式保存镜像、CPU、内存、PID 与网络策略。显式 CLI 选项只作为一致性断言，不能覆盖绑定值。
 
-读取器保留 v1/v2 兼容路径。v1 没有 `verification`，因此会明确提示并使用当前配置；v2 复用步骤，但 runner 和资源仍来自 CLI。v3 对 metadata 采用严格 schema：步骤列表不能为空，label、argv 和每个参数都必须是非空字符串；runner 只能为 `local` 或 `docker`；超时必须是正有限数；Docker 字段类型、范围和集合必须精确匹配，未知字段同样被拒绝。
+仓库指纹优先对 `remote.origin.url` 做 SHA-256；无 origin 时对排序后的 Git 根提交集合做 SHA-256，因此报告和 plan 不保存远端 URL 或本机仓库路径作为身份数据。Git baseline 接受 SHA-1 与 SHA-256 object format 的完整对象 ID。指纹和 diff 摘要用于检测漂移/损坏，不提供签名真实性：能够修改 plan 的主体仍可重算摘要。
 
-### 13.1 plan v3 应用门禁
+读取器保留 v1/v2/v3 兼容路径。v1 没有 `verification`；v2 复用步骤但 runner 和资源仍来自 CLI；v3 绑定完整执行策略但没有 provenance。v4 对 provenance 和 diff 摘要使用严格 schema，同时继承 v3 的 runner、超时和 Docker 类型/范围校验。
+
+### 13.1 plan v4 应用门禁
 
 ```mermaid
 flowchart TD
-    INPUT[apply-plan + plan v3 + 当前项目]
+    INPUT[apply-plan + plan v4 + 当前项目]
     SCHEMA{格式与字段严格有效?}
+    PROVENANCE{仓库指纹、HEAD、子路径<br/>与预览一致?}
     PATHS{路径、类型、测试保护有效?}
     HASH{当前文件 SHA-256<br/>等于预览时 hash?}
+    DIFF{重建 diff SHA-256<br/>等于 plan 摘要?}
     ASSERT{显式 CLI 断言<br/>与绑定策略一致?}
     INITIAL[按 plan 的 runner、timeout、steps<br/>复现当前失败]
     APPLY[在隔离副本应用已审核内容]
@@ -554,11 +567,15 @@ flowchart TD
 
     INPUT --> SCHEMA
     SCHEMA -->|否| STOP
-    SCHEMA -->|是| PATHS
+    SCHEMA -->|是| PROVENANCE
+    PROVENANCE -->|否| STOP
+    PROVENANCE -->|是| PATHS
     PATHS -->|否| STOP
     PATHS -->|是| HASH
     HASH -->|否| STOP
-    HASH -->|是| ASSERT
+    HASH -->|是| DIFF
+    DIFF -->|否| STOP
+    DIFF -->|是| ASSERT
     ASSERT -->|否| STOP
     ASSERT -->|是| INITIAL
     INITIAL --> APPLY
@@ -579,14 +596,16 @@ flowchart LR
     VERSION -->|v1| V1[文件 hash + 修改内容<br/>验证命令来自当前配置]
     VERSION -->|v2| V2[再绑定 BuildStep argv<br/>runner 来自 CLI]
     VERSION -->|v3| V3[再绑定 runner、timeout<br/>Docker 完整策略]
+    VERSION -->|v4| V4[再绑定 Git provenance<br/>与最终 diff SHA-256]
     V1 --> WARN[显示兼容性警告]
     V2 --> WARN
     V3 --> STRICT[严格执行绑定策略]
+    V4 --> STRICT
     WARN --> APPLY[复用统一 repair 验证管线]
     STRICT --> APPLY
 ```
 
-兼容读取不等于旧格式拥有新格式的保证。需要最高确定性时，应重新执行预览生成 v3，而不是手工修改旧 plan 的版本号。
+兼容读取不等于旧格式拥有新格式的保证。需要最高确定性时，应重新执行预览生成 v4，而不是手工修改旧 plan 的版本号。
 
 ## 14. 审计与报告
 
@@ -597,6 +616,7 @@ flowchart LR
 - 行号、删除行数，以及旧/新文本的 SHA-256（而非在 proposal 区重复全文）；
 - 静态拒绝原因；
 - 最终 unified diff；
+- workspace 类型、仓库指纹、基线 commit、项目子路径与最终 diff SHA-256；
 - 是否应用、隔离、回滚和成功；
 - 顶层错误说明。
 
