@@ -56,6 +56,8 @@ def _is_source(path: Path) -> bool:
 
 
 def _is_test_source(root: Path, path: Path) -> bool:
+    """Return whether a canonical project-relative path is a test source."""
+
     relative = path.relative_to(root)
     name = relative.name.lower()
     stem = relative.stem.lower()
@@ -104,6 +106,14 @@ def collect_source_context(
     reviewed project tree and does not accidentally include dependency caches.
     """
 
+    # Canonicalize the root once before mixing paths discovered by directory
+    # traversal with paths parsed from build output. On Windows, a temporary
+    # directory may be supplied through an 8.3 alias such as ``RUNNER~1`` while
+    # ``Path.resolve()`` expands referenced files to ``runneradmin``. Although
+    # both spellings identify the same directory, ``Path.relative_to()`` is a
+    # lexical operation and rejects the mixed forms. Keeping one canonical root
+    # also preserves the containment checks below instead of bypassing them.
+    root = root.expanduser().resolve()
     output = "\n".join(f"{step.stdout}\n{step.stderr}" for step in build.steps)
     ordered = _referenced_paths(root, output)
     for path in sorted(root.rglob("*")):

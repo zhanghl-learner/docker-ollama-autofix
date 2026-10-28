@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Windows 临时工作区在 8.3 短路径（如 `RUNNER~1`）与长路径混用时，源码上下文收集不再因纯词法 `relative_to()` 比较而失败；收集入口现在统一规范化项目根路径，并保留解析后路径的项目边界检查。
+- 新增非规范根路径与已解析构建输出路径混用的回归测试，覆盖 GitHub 托管 Windows runner 暴露的路径身份问题；同时验证构建输出引用的项目外源码仍不会被收集。
 - Windows 相对项目可执行文件集成测试改用临时 `.cmd`，不再复制系统 `cmd.exe`；保留 `shell=False` 的真实执行覆盖，同时兼容 GitHub 托管 Windows runner 的安全策略。
 - CI 保存 pytest JUnit 结果，并把失败测试与异常发布为 GitHub Check annotation，避免托管 runner 日志不可匿名下载时丢失诊断信息。
 
