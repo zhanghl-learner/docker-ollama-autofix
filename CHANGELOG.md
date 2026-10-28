@@ -30,8 +30,11 @@
 
 - Windows 本机 199 项 pytest、`compileall`、Python/Node 复杂 fixture 基线和 workflow YAML 检查通过。
 - 隔离 PEP 517 wheel 构建通过，并确认 `autofix/repository.py` 与 `autofix/agent/artifacts.py` 已包含在生成包中。
+- 使用 `qwen2.5-coder:7b` 在独立 Git 仓库完成失败复现、detached-worktree 预览、plan v4 重放、指定 patch 输出和显式本地 commit 闭环；最终 commit 只包含目标源码并保留 diff trailer。
 
 ### Fixed
+
+- detached Git worktree 因 `core.autocrlf` 使用 CRLF、而调用方原文件仍为 LF 时，隔离结果现在会在生成 report/patch/plan 和写回前规范化到原文件换行风格，避免安全的 diff SHA-256 校验错误拒绝同一方案。
 
 - Windows 临时工作区在 8.3 短路径（如 `RUNNER~1`）与长路径混用时，源码上下文收集不再因纯词法 `relative_to()` 比较而失败；收集入口现在统一规范化项目根路径，并保留解析后路径的项目边界检查。
 - 新增非规范根路径与已解析构建输出路径混用的回归测试，覆盖 GitHub 托管 Windows runner 暴露的路径身份问题；同时验证构建输出引用的项目外源码仍不会被收集。

@@ -171,6 +171,8 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 
 第四切片已在 2026-10-28 完成本机验证：199 项测试覆盖 patch 确定性顺序、拒绝覆盖、字节摘要、`git apply --check`、commit 精确 pathspec、并发内容/索引变化、意外文件阻断和 CLI 端到端提交；Python/Node 复杂 fixture 基线、源码编译、workflow YAML 与 wheel 内容检查继续通过。commit 前再次核对 provenance、目标 bytes 和完整 Git 变更集合，保留 hooks，并明确不执行 push/merge。
 
+同日使用 `qwen2.5-coder:7b` 完成独立 Git 项目的真实闭环。首次重放暴露主工作区 LF 与 detached worktree CRLF 导致的 diff digest 漂移；安全门禁在写入前停止。修复换行归一化并加入强制 `core.autocrlf=true` 回归后，重新生成的 plan v4 成功应用，指定 patch 通过反向检查，本地 commit 仅修改一个目标源码文件且包含 `AutoFix-Diff-SHA256` trailer。
+
 ## 8. 文档维护规则
 
 以后每轮迭代至少检查：

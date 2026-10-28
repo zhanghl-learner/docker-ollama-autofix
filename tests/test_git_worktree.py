@@ -14,6 +14,7 @@ from autofix.agent import (
     FileChange,
     PlanProvenance,
     RepairProposal,
+    load_repair_plan,
     repair_project,
     save_repair_plan,
 )
@@ -71,10 +72,14 @@ def _repository_project(tmp_path: Path) -> tuple[Path, Path, tuple[BuildStep, ..
     project = repository / "service"
     project.mkdir(parents=True)
     _git(repository, "init", "--quiet")
+    _git(repository, "config", "core.autocrlf", "true")
     _git(repository, "config", "user.name", "AutoFix Tests")
     _git(repository, "config", "user.email", "autofix@example.invalid")
     (repository / ".gitignore").write_text(".autofix/\n", encoding="utf-8")
-    (project / "value.py").write_text("value = 1\n", encoding="utf-8")
+    # Keep LF in the caller worktree while forcing detached checkouts to CRLF.
+    # This reproduces the Windows plan-digest drift that consolidation must
+    # normalize before saving a portable result.
+    (project / "value.py").write_bytes(b"value = 1\n")
     _git(repository, "add", ".gitignore", "service/value.py")
     _git(
         repository,
@@ -142,6 +147,24 @@ def test_git_preview_runs_entire_build_loop_in_detached_subproject_worktree(
     assert len(report["diff_sha256"]) == 64
     assert set(report["diff_sha256"]) <= set(string.hexdigits.lower())
     assert "autofix-worktree-" not in json.dumps(report)
+    assert "\r\n" not in result.changes[0].replacement
+
+    plan = save_repair_plan(
+        project,
+        model="test",
+        summary=result.proposals[-1].summary,
+        changes=result.changes,
+        verification_steps=steps,
+        provenance=PlanProvenance(
+            "git",
+            result.repository_fingerprint,
+            result.baseline_commit,
+            result.project_subpath,
+        ),
+    )
+    loaded, loaded_changes = load_repair_plan(plan, project)
+    assert loaded.diff_sha256 == result.diff_sha256
+    assert loaded_changes[0].replacement == "value = 2\n"
 
 
 def test_apply_plan_can_create_explicit_local_commit_without_push(

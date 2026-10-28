@@ -128,8 +128,8 @@ def _validate_preservation(
         )
 
 
-def _preserve_newline_style(original: str, proposed: str) -> str:
-    """Normalize model text to the source file's existing newline convention."""
+def normalize_newline_style(original: str, proposed: str) -> str:
+    """Normalize replacement text to the source file's newline convention."""
 
     newline = "\r\n" if "\r\n" in original else "\n"
     normalized = proposed.replace("\r\n", "\n").replace("\r", "\n")
@@ -229,8 +229,8 @@ def _validate_line_edits(
                 edit.path,
                 edit.start_line,
                 edit.delete_lines,
-                _preserve_newline_style(original, edit.old_text),
-                _preserve_newline_style(original, edit.new_text),
+                normalize_newline_style(original, edit.old_text),
+                normalize_newline_style(original, edit.new_text),
                 edit.reason,
             )
             if edit.delete_lines == 0 and edit.old_text:
@@ -474,7 +474,7 @@ def validate_changes(
             original = read_utf8_exact(path)
         except (OSError, UnicodeDecodeError) as exc:
             raise UnsafePatchError(f"File is not editable UTF-8 text: {change.path}") from exc
-        replacement = _preserve_newline_style(original, change.content)
+        replacement = normalize_newline_style(original, change.content)
         if path.suffix.lower() == ".py" and not allow_destructive_changes:
             replacement = _merge_import_only_python(original, replacement)
         if original == replacement:

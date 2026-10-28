@@ -20,6 +20,7 @@ from autofix.agent.patches import (
     UnsafePatchError,
     ValidatedChange,
     apply_changes,
+    normalize_newline_style,
     restore_files,
     validate_changes,
     validated_diff_sha256,
@@ -635,6 +636,14 @@ def repair_project(
                             )
                         replacement = read_utf8_exact(work_root / relative)
                         original_text = read_utf8_exact(destination)
+                        # Git may check out a detached worktree with a different
+                        # autocrlf policy than the caller's current file bytes.
+                        # Bind plans, patches, and writeback to the real file's
+                        # newline convention so a verified preview remains
+                        # deterministic when it is loaded again.
+                        replacement = normalize_newline_style(
+                            original_text, replacement
+                        )
                         if replacement != original_text:
                             reasons = [
                                 change.reason

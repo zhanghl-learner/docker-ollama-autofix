@@ -499,6 +499,8 @@ sequenceDiagram
 
 隔离成功后，代码逐文件把“原始项目内容”和“隔离工作区最终内容”合并为 `ValidatedChange`。若要应用，会比较修复开始时保存的原始 bytes 与当前目标 bytes；任一文件在期间被编辑，就抛出错误而不是覆盖并发工作。
 
+Git 的 `core.autocrlf` 可能让 detached worktree 使用 CRLF，而调用方当前文件仍保留 LF。合并隔离结果时先以真实目标文件为准统一换行风格，再计算 diff、plan digest、patch 和写回内容；因此同一个已验证方案不会仅因两个 worktree 的检出策略不同而发生摘要漂移。
+
 repair report v2 的 `workspace` 记录 `kind`、`repository_root`、仓库指纹、`baseline_commit` 和项目子路径，顶层 `diff_sha256` 记录规范化最终 diff 摘要。报告中的项目/build root 统一指向真实项目，不泄露或引用已经删除的临时路径。
 
 直接模式会在首次修改前保存 bytes。异常或最终验证失败时默认恢复所有备份；只有显式 `--keep-failed` 才保留失败修改。
