@@ -34,6 +34,9 @@ jobs:
       - name: Install development dependencies
         run: python -m pip install -e ".[dev]"
 
+      - name: Verify clean Git workspace contract
+        run: autofix git-status . --json --require-clean
+
       - name: Compile source and tests
         run: python -m compileall -q src tests
 

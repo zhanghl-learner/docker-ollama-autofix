@@ -125,10 +125,13 @@ autofix configure --model qwen3:0.6b --docker-image my-project-builder:latest --
 
 ```powershell
 cd E:\path\to\project
+autofix git-status . --require-clean
 autofix inspect .
 autofix offline-check .
 autofix run . --docker
 ```
+
+`git-status` 是只读检查，不会执行 checkout、stash、commit 或清理文件。它报告仓库根目录、分支或 detached HEAD、基线 commit，以及 tracked/untracked 变更；`--require-clean` 在非 Git 目录或脏工作区返回退出码 1，适合在 CI 和修复前置步骤中使用。当前版本只建立状态与策略契约，尚未让 `repair --apply` 自动创建 worktree；在下一切片完成前，仍应由开发者保持工作区干净。
 
 如果 `run` 已通过，项目没有需要修复的已知构建错误。如果失败，执行安全预览：
 
@@ -304,6 +307,8 @@ autofix evaluate examples\complex-validation\python-order-service `
 | `autofix doctor` | 检查 Python、Git、Docker、Ollama 与 Ollama API | 否 |
 | `autofix configure ...` | 保存所有项目继承的用户默认值 | 否；会写用户配置 |
 | `autofix inspect .` | 检测项目和候选命令，可用 `--build-system` 选择 | 否 |
+| `autofix git-status .` | 只读显示 Git 身份、HEAD 和 tracked/untracked 变更 | 否 |
+| `autofix git-status . --require-clean` | 非 Git 或脏工作区返回 1，供 CI/前置门禁使用 | 否 |
 | `autofix init .` | 创建项目配置 | 仅创建配置 |
 | `autofix offline-check .` | 检查断网修复所需资源 | 否 |
 | `autofix run .` | 执行构建/测试并写运行报告 | 否 |

@@ -155,13 +155,15 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 
 下一轮从 v0.20 的最小垂直切片开始：
 
-1. 定义 Git 状态数据模型和策略，不修改文件；
-2. 为非 Git、干净 Git、脏 Git、未跟踪文件和 detached HEAD 编写测试；
-3. 在 preview 路径接入 worktree，确保失败不触碰原工作树；
+1. [x] 定义只读 `GitWorkspaceStatus` / `GitChange` 数据模型和 direct-apply 策略；新增 `autofix git-status`，不修改 Git 或源码；
+2. [x] 覆盖非 Git、干净 Git、tracked/untracked 脏工作区和 detached HEAD；CI 使用 `--require-clean` 验证干净检出契约；
+3. [ ] 在 preview 路径接入 worktree，确保失败不触碰原工作树；
 4. 把基线 commit 与 diff hash 写入 repair/plan 报告；
 5. 最后才开放显式 apply/commit，并保留人工确认边界。
 
-这一顺序能够先固定安全契约，再实现外部行为。每个步骤都必须保持现有 162 项测试和多语言 fixture 基线不退化。
+这一顺序能够先固定安全契约，再实现外部行为。前两项已经形成只读垂直切片；下一项不得通过自动 stash、清理或覆盖来处理脏工作区。每个步骤都必须保持现有测试和多语言 fixture 基线不退化。
+
+第一切片已在 2026-10-28 完成本机验证：171 项测试、两个复杂 fixture 基线、源码编译和 wheel 内容检查通过；GitHub Actions 结果需在推送本次提交后单独记录，不能沿用上一次提交的绿色状态。
 
 ## 8. 文档维护规则
 

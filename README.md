@@ -8,7 +8,7 @@ AutoFix is a local-first command-line tool that detects a project's build system
 
 AutoFix is a safety-first code-repair engineering prototype and evaluation harness. It is intended for reproducible build or test failures in small and medium repositories where a developer can review the resulting diff. It is not positioned as a general autonomous programmer or as an unattended production service.
 
-The current evidence base includes 162 automated tests, real local repair loops across Python, Node.js, Go, C++, and Java, Docker-isolated Python verification, and two repeatable multi-file benchmark cases. The Windows suite passes all 162 tests; the Linux Docker self-host passes 161 and skips the one Windows-only `CreateProcess` integration test. In the current benchmark, `qwen3:0.6b` completed neither complex case, while `qwen2.5-coder:7b` completed both under the 0.19.0 retry protocol. These results demonstrate the repair pipeline and its ability to expose model differences; they do not yet establish broad success on arbitrary repositories.
+The current evidence base includes an automated Windows test suite, real local repair loops across Python, Node.js, Go, C++, and Java, Docker-isolated Python verification, and two repeatable multi-file benchmark cases. The released 0.19.0 baseline passed 162 Windows tests; the Linux Docker self-host passed 161 and skipped the one Windows-only `CreateProcess` integration test. In the current benchmark, `qwen3:0.6b` completed neither complex case, while `qwen2.5-coder:7b` completed both under the 0.19.0 retry protocol. These results demonstrate the repair pipeline and its ability to expose model differences; they do not yet establish broad success on arbitrary repositories.
 
 The next development phase is **safe real-repository integration and evaluation at scale**. Human review remains part of the intended workflow. See the [development roadmap](docs/ROADMAP_ZH.md) for milestones, acceptance criteria, and release preparation.
 
@@ -52,6 +52,7 @@ The model proposes edits but never decides acceptance and never writes directly 
 - Single-file Python programs with top-level runtime logic are executed as their build check, so runtime errors such as missing imports reach the repair model; passive library modules still use `compileall`.
 - Confident environment failures such as declared-but-missing Python/Node dependencies, missing compilers/linkers/build tools, incompatible JDK releases, unavailable Docker images/daemon, and offline Cargo cache misses are separated from code failures; AutoFix records the diagnosis without asking the model to edit source.
 - `autofix inspect [PATH]` detects Python, CMake, Maven, Gradle, npm/pnpm/yarn, Rust, and Go projects; polyglot repositories can select a detected system with `--build-system` or `build.system`.
+- `autofix git-status [PATH]` reports the repository root, branch or detached HEAD, baseline commit, tracked/untracked paths, and the future direct-apply policy without changing Git. Add `--require-clean` for a CI/preflight cleanliness gate.
 - `autofix run [PATH]` executes the selected build plan without a shell and saves a JSON report under `.autofix/runs/`.
 - Ordered build matrices can be declared with `build.commands` or repeated `--step`; execution stops at the first failing step and repair is accepted only when every step passes.
 - `autofix repair [PATH]` sends bounded build diagnostics and numbered source context to local Ollama, validates exact line-level edits, verifies them in an isolated copy, and only then emits a unified diff and reusable plan.
@@ -88,6 +89,7 @@ autofix doctor
 autofix configure --model qwen3:0.6b --docker-image autofix-python:3.11 --offline
 autofix init C:\path\to\project --model qwen3:0.6b
 autofix inspect .
+autofix git-status . --require-clean
 autofix run . --dry-run
 autofix run .
 autofix evaluate examples\complex-validation\python-order-service
@@ -174,6 +176,7 @@ Machine-readable output is available on all inspection commands:
 autofix doctor --json
 autofix offline-check .
 autofix inspect . --json
+autofix git-status . --json
 autofix run . --json
 ```
 

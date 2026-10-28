@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Added
+
+- 新增只读 `autofix git-status [PATH]`，报告 Git 可用性、仓库根目录、分支或 detached HEAD、基线 commit、tracked/untracked 变更和 direct-apply 策略。
+- `autofix git-status --require-clean` 在非 Git 目录或脏工作区返回 1，可作为 CI 和未来 repair/worktree 的前置门禁；`--json` 输出稳定结构。
+- 新增真实临时仓库测试，覆盖非 Git、干净/未提交基线仓库、tracked/untracked 修改、rename、detached HEAD 和 CLI 干净门禁。
+
+### CI
+
+- Windows/Linux 测试任务在编译和 pytest 前验证干净 Git 检出契约。
+
+### Verified
+
+- Windows 本机 171 项 pytest、`compileall`、Python/Node 复杂 fixture 基线和 workflow YAML 检查通过。
+- 隔离 PEP 517 wheel 构建通过，并确认 `autofix/repository.py` 已包含在生成包中。
+
 ### Fixed
 
 - Windows 临时工作区在 8.3 短路径（如 `RUNNER~1`）与长路径混用时，源码上下文收集不再因纯词法 `relative_to()` 比较而失败；收集入口现在统一规范化项目根路径，并保留解析后路径的项目边界检查。

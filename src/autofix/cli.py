@@ -41,6 +41,7 @@ from autofix.evaluation import (
     load_evaluation_manifest,
 )
 from autofix.models import BuildStep, ProjectInspection
+from autofix.repository import GitInspectionError, inspect_git_workspace
 from autofix.config import (
     AutoFixConfig,
     ConfigError,
@@ -396,6 +397,50 @@ def inspect_command(
         commands = "\n".join(" ".join(step.argv) for step in match.steps)
         table.add_row("yes" if index == 0 else "", match.language, match.build_system, ", ".join(match.markers), commands)
     console.print(table)
+
+
+@app.command("git-status")
+def git_status_command(
+    path: Path = typer.Argument(Path("."), exists=True, file_okay=False, resolve_path=True),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+    require_clean: bool = typer.Option(
+        False,
+        "--require-clean",
+        help="Exit 1 unless PATH belongs to a clean Git worktree.",
+    ),
+) -> None:
+    """Inspect Git identity and changes without modifying the repository."""
+
+    try:
+        status = inspect_git_workspace(path)
+    except GitInspectionError as exc:
+        console.print(f"[red]Git inspection failed: {exc}[/red]")
+        raise typer.Exit(code=2) from exc
+
+    if json_output:
+        _json(status.to_dict())
+    else:
+        table = Table(title=f"Git workspace: {status.requested_root}")
+        table.add_column("Field")
+        table.add_column("Value")
+        table.add_row("state", status.state)
+        table.add_row("repository root", str(status.repository_root or "not detected"))
+        table.add_row("branch", status.branch or ("detached HEAD" if status.detached else "none"))
+        table.add_row("HEAD", status.head_commit or "unborn/unavailable")
+        table.add_row("direct apply policy", status.direct_apply_policy)
+        table.add_row("changes", str(len(status.changes)))
+        console.print(table)
+        if status.changes:
+            changes = Table(title="Tracked and untracked paths")
+            changes.add_column("Status")
+            changes.add_column("Path")
+            changes.add_column("Original path")
+            for change in status.changes:
+                changes.add_row(change.status, change.path, change.original_path or "")
+            console.print(changes)
+
+    if require_clean and not status.clean:
+        raise typer.Exit(code=1)
 
 
 @app.command("init")

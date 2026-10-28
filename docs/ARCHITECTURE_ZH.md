@@ -34,6 +34,7 @@ flowchart TB
         CLI[Typer CLI<br/>cli.py]
         CONFIG[全局与项目配置<br/>config.py]
         DETECT[项目及工具链检测<br/>detectors/project.py]
+        GIT[只读 Git 工作区状态<br/>repository.py]
     end
 
     subgraph Orchestration[编排层]
@@ -68,6 +69,7 @@ flowchart TB
     USER --> CLI
     CLI --> CONFIG
     CLI --> DETECT
+    CLI --> GIT
     CONFIG --> STEPS
     DETECT --> STEPS
     STEPS --> REPAIR
@@ -103,6 +105,7 @@ flowchart TB
 | 输入 | 中间对象 | 输出 |
 | --- | --- | --- |
 | `autofix.yml`、CLI 参数、项目标记 | `ProjectInspection`、`AutoFixConfig` | 有序 `BuildStep` |
+| 项目路径、Git porcelain v1 | `GitWorkspaceStatus`、`GitChange` | 仓库身份、HEAD、脏工作区策略 |
 | 失败的 `BuildResult`、受限源码 | Ollama JSON、`RepairProposal` | 候选 `FileEdit` |
 | 原文件、候选编辑 | `ValidatedChange` | 精确 diff 或拒绝原因 |
 | 验证后的修改、执行策略 | `RepairPlan` v3 | 可审核、可确定性应用的 JSON |
@@ -116,6 +119,7 @@ src/autofix/
 ├── config.py               # 用户级/项目级 YAML 合并与校验
 ├── evaluation.py           # 评测契约、隔离 repair 计分与 JSON 报告
 ├── models.py               # BuildStep、ProjectMatch、ProjectInspection
+├── repository.py           # 只读 Git 身份、porcelain 状态与策略
 ├── detectors/project.py    # 构建系统与 Python 入口检测
 ├── builders/
 │   ├── runner.py           # 无 shell 的本机构建、超时、运行报告
@@ -138,7 +142,13 @@ src/autofix/
 
 `tests/` 按上述模块覆盖检测、配置、执行、Docker 参数、模型协议、补丁安全、隔离提交、plan、rollback、离线检查和 bundle。
 
-### 3.1 评测层不是另一套修复器
+### 3.1 Git 状态是只读安全输入
+
+`inspect_git_workspace()` 只调用无 shell、带超时的 Git 元数据命令。仓库根目录来自 `git rev-parse --show-toplevel`，分支使用 `symbolic-ref`，HEAD 使用 `rev-parse --verify HEAD`，变更使用 NUL 分隔的 `status --porcelain=v1 -z --untracked-files=all`。NUL 格式避免空格、引号和换行路径造成普通行解析歧义；解析器保留状态码前导空格，并记录 rename/copy 的原路径。
+
+`GitWorkspaceStatus` 明确区分 `git-unavailable`、`not-repository`、`clean` 和 `dirty`。`direct_apply_policy` 当前是下一阶段门禁所需的只读决策数据：有基线 commit 的干净仓库为 `allowed`，脏仓库为 `blocked-dirty`，尚无 commit 的仓库为 `blocked-unborn`，非 Git 项目为 `unversioned`。本切片没有执行 checkout、stash、commit、worktree、push 或修改源码，也尚未改变现有 repair/apply 行为。
+
+### 3.2 评测层不是另一套修复器
 
 `evaluation.py` 复用 `BuildStep`、`run_build`、`repair_project` 与 Docker runner，不复制 repair 算法。它只增加一个外部验收契约：用例必须在声明的步骤以预期退出码和输出特征稳定失败；模型修复必须通过原命令矩阵；最终变更路径必须落在 `allowed_change_paths` 内；`required_change_paths` 必须全部命中。
 
@@ -161,7 +171,7 @@ flowchart LR
 
 评测命令永远不给 `repair_project` 传 `apply=true`。即使模型得到通过构建的方案，原始 fixture 仍保持故障状态，可重复运行。repair 模式会先独立执行一次 preflight；如果 `expected_failure` 不匹配，则不进入模型边界，proposal 数保持为 0。清单路径会统一为 POSIX 相对路径，并拒绝绝对路径、`..`、项目外解析结果、重复项和不存在的文件。评测报告同时记录清单 SHA-256，便于判断两次分数是否基于同一契约。
 
-### 3.2 独立重试与证据累积
+### 3.3 独立重试与证据累积
 
 0.19.0 将“候选编辑状态”和“重试证据状态”分离。候选验证失败后，文件恢复到本轮开始前的字节；但 `VerificationFailure` 保留 diagnosis、`ValidatedChange.diff` 和 `BuildResult`。下一轮看到干净的编号源码，同时收到最近三轮累计证据。
 
