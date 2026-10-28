@@ -25,7 +25,12 @@ The next development phase is **safe real-repository integration and evaluation 
 
 ```mermaid
 flowchart LR
-    PROJECT[Project + autofix.yml] --> DETECT[Detect and select BuildStep matrix]
+    PROJECT[Project + autofix.yml] --> GIT{Git workspace policy}
+    GIT -->|clean committed repo| WORKTREE[Detached temporary worktree]
+    GIT -->|dirty or unborn repo| STOPGIT[Stop before build/model]
+    GIT -->|non-Git project| COPY[Disposable project copy]
+    WORKTREE --> DETECT[Detect and select BuildStep matrix]
+    COPY --> DETECT
     CONTRACT[autofix-eval.yml] --> EVAL[Reproducible evaluation]
     EVAL --> BUILD
     EVAL --> MODEL
@@ -34,7 +39,7 @@ flowchart LR
     DIAG -->|yes| STOP[Audit report, no model call]
     DIAG -->|no| MODEL[Bounded context to local Ollama]
     MODEL --> PATCH[Exact line-edit validation]
-    PATCH --> SANDBOX[Verify in disposable project copy]
+    PATCH --> SANDBOX[Verify in worktree or disposable copy]
     SANDBOX -->|pass| PLAN[Hash and policy bound plan v3]
     PLAN --> APPLY[Deterministic apply-plan]
     APPLY --> AUDIT[Report, history, rollback, undo]
@@ -52,10 +57,10 @@ The model proposes edits but never decides acceptance and never writes directly 
 - Single-file Python programs with top-level runtime logic are executed as their build check, so runtime errors such as missing imports reach the repair model; passive library modules still use `compileall`.
 - Confident environment failures such as declared-but-missing Python/Node dependencies, missing compilers/linkers/build tools, incompatible JDK releases, unavailable Docker images/daemon, and offline Cargo cache misses are separated from code failures; AutoFix records the diagnosis without asking the model to edit source.
 - `autofix inspect [PATH]` detects Python, CMake, Maven, Gradle, npm/pnpm/yarn, Rust, and Go projects; polyglot repositories can select a detected system with `--build-system` or `build.system`.
-- `autofix git-status [PATH]` reports the repository root, branch or detached HEAD, baseline commit, tracked/untracked paths, and the future direct-apply policy without changing Git. Add `--require-clean` for a CI/preflight cleanliness gate.
+- `autofix git-status [PATH]` reports the repository root, branch or detached HEAD, baseline commit, tracked/untracked paths, and direct-apply policy without changing Git. Add `--require-clean` for a CI/preflight cleanliness gate.
 - `autofix run [PATH]` executes the selected build plan without a shell and saves a JSON report under `.autofix/runs/`.
 - Ordered build matrices can be declared with `build.commands` or repeated `--step`; execution stops at the first failing step and repair is accepted only when every step passes.
-- `autofix repair [PATH]` sends bounded build diagnostics and numbered source context to local Ollama, validates exact line-level edits, verifies them in an isolated copy, and only then emits a unified diff and reusable plan.
+- `autofix repair [PATH]` requires a clean committed Git baseline, then runs baseline reproduction, model edits, and verification in a detached temporary worktree. Dirty/unborn repositories stop before build or Ollama; non-Git projects retain disposable-copy isolation.
 - Failed verified candidates are audited with their exact diff and test regressions, then discarded before the next attempt. Retries start from the same clean baseline, receive cumulative evidence, reject duplicate/cyclic states, and require a structured causal diagnosis before editing.
 - `autofix apply-plan PLAN --project PATH` applies the exact hash-bound proposal that was reviewed during preview, without a second model request. Plan v3 binds the ordered commands, local/Docker runner, timeout, image, network policy, and container limits, so later configuration changes cannot silently replace the reviewed build gate.
 - `autofix history [PATH]` lists timestamped repair audit reports, including rejected proposals, diffs, verification, and rollback outcomes.
@@ -224,7 +229,7 @@ The bundle contains an offline Python wheelhouse and `install.ps1`, `docker/imag
 
 ## Safety boundary
 
-AutoFix runs only a known detected command or an explicit command supplied by the user. Repairs generate a diff, reject paths outside the project, use a bounded number of attempts, and are accepted only after the real build or tests pass. Failed applied repairs are rolled back unless `--keep-failed` is supplied.
+AutoFix runs only a known detected command or an explicit command supplied by the user. Repairs generate a diff, reject paths outside the project, use a bounded number of attempts, and are accepted only after the real build or tests pass. A Git repair never stashes or cleans user work: dirty and unborn repositories are rejected, while clean committed repositories use a detached temporary worktree. Failed applied repairs are rolled back unless `--keep-failed` is supplied.
 
 A passing build proves only the configured gate. It does not prove business correctness, security, or production readiness. Use a clean Git worktree, inspect the diff, and run independent checks before committing. Docker restrictions reduce risk but are not a strong sandbox for hostile repositories or build scripts.
 
@@ -232,7 +237,7 @@ Evaluation is deliberately non-mutating. A baseline case passes only when its de
 
 ## Roadmap
 
-The v1 evaluation contract is established by the Python and Node.js multi-file boundary-condition fixtures. The next phase prioritizes Git worktree isolation and dirty-worktree protection, CI-friendly machine output, an aggregate benchmark runner, broader Go/Rust/Java/C++ cases, and security hardening. Semantic context selection and distribution hardening follow only after those foundations are measurable. The detailed order and exit criteria are maintained in [docs/ROADMAP_ZH.md](docs/ROADMAP_ZH.md).
+The v1 evaluation contract is established by the Python and Node.js multi-file boundary-condition fixtures. Git worktree isolation and dirty-worktree protection are now implemented; the next slices bind Git identity and diff hashes into plans/reports, stabilize CI-facing result contracts, and add aggregate benchmarks plus broader Go/Rust/Java/C++ cases. The detailed order and exit criteria are maintained in [docs/ROADMAP_ZH.md](docs/ROADMAP_ZH.md).
 
 ## License
 

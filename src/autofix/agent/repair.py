@@ -25,6 +25,13 @@ from autofix.agent.patches import (
 from autofix.agent.textio import read_utf8_exact
 from autofix.builders import BuildResult, run_build
 from autofix.models import BuildStep
+from autofix.repository import (
+    DetachedGitWorktree,
+    GitInspectionError,
+    GitWorktreeError,
+    create_detached_worktree,
+    validate_git_repair_workspace,
+)
 
 
 WORKSPACE_IGNORED_PARTS = {
@@ -79,6 +86,10 @@ class RepairResult:
     rejections: tuple["ProposalRejection", ...] = ()
     verification_failures: tuple["VerificationFailure", ...] = ()
     report_path: Path | None = None
+    project_root: Path | None = None
+    workspace_kind: str = "original"
+    repository_root: Path | None = None
+    baseline_commit: str | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -90,13 +101,20 @@ class RepairResult:
         """Serialize audit data without duplicating full proposal contents."""
 
         return {
-            "version": 1,
+            "version": 2,
             "type": "repair",
-            "root": str(self.initial_build.root),
+            "root": str(self.project_root or self.initial_build.root),
             "succeeded": self.succeeded,
             "applied": self.applied,
             "rolled_back": self.rolled_back,
             "isolated": self.isolated,
+            "workspace": {
+                "kind": self.workspace_kind,
+                "repository_root": (
+                    str(self.repository_root) if self.repository_root else None
+                ),
+                "baseline_commit": self.baseline_commit,
+            },
             "initial_build": self.initial_build.to_dict(),
             "final_build": self.final_build.to_dict(),
             "proposals": [
@@ -320,15 +338,99 @@ def repair_project(
     """
 
     root = root.resolve()
-    initial = build_runner(root, steps, timeout_seconds=timeout_seconds)
+    try:
+        git_status = validate_git_repair_workspace(root)
+    except (GitInspectionError, GitWorktreeError) as exc:
+        raise UnsafePatchError(str(exc)) from exc
+
+    temporary: tempfile.TemporaryDirectory[str] | None = None
+    git_worktree: DetachedGitWorktree | None = None
+    work_root = root
+    using_temporary = isolate or not apply
+    workspace_kind = "original"
+    if using_temporary:
+        if git_status.is_repository:
+            try:
+                git_worktree = create_detached_worktree(git_status)
+            except GitWorktreeError as exc:
+                raise UnsafePatchError(str(exc)) from exc
+            work_root = git_worktree.project_root
+            workspace_kind = "git-worktree"
+        else:
+            temporary = tempfile.TemporaryDirectory(prefix="autofix-repair-")
+            work_root = Path(temporary.name) / "workspace"
+            try:
+                shutil.copytree(root, work_root, ignore=_workspace_ignore)
+            except Exception:
+                temporary.cleanup()
+                raise
+            workspace_kind = "temporary-copy"
+
+    def cleanup() -> None:
+        """Release copy/worktree files and Git administrative metadata."""
+
+        if git_worktree is not None:
+            try:
+                git_worktree.close()
+            except GitWorktreeError as exc:
+                raise UnsafePatchError(str(exc)) from exc
+        if temporary is not None:
+            temporary.cleanup()
+
+    def cleanup_after_error(error: BaseException) -> None:
+        """Preserve the primary failure while recording any cleanup failure."""
+
+        try:
+            cleanup()
+        except Exception as cleanup_error:
+            error.add_note(f"Temporary workspace cleanup also failed: {cleanup_error}")
+
+    def run_workspace_build() -> BuildResult:
+        """Execute inside isolation while keeping reports bound to the real project."""
+
+        result = build_runner(work_root, steps, timeout_seconds=timeout_seconds)
+        if work_root != root:
+            return replace(result, root=root, report_path=None)
+        return result
+
+    try:
+        initial = run_workspace_build()
+    except BaseException as exc:
+        cleanup_after_error(exc)
+        raise
     if initial.succeeded:
-        result = RepairResult(initial, initial, (), (), False, False, isolate)
+        result = RepairResult(
+            initial,
+            initial,
+            (),
+            (),
+            False,
+            False,
+            using_temporary,
+            project_root=root,
+            workspace_kind=workspace_kind,
+            repository_root=git_status.repository_root,
+            baseline_commit=git_status.head_commit,
+        )
         if save_report:
             result = replace(result, report_path=_save_repair_report(root, result))
+        cleanup()
         return result
     environment_issue = environment_failure(initial)
     if environment_issue:
-        result = RepairResult(initial, initial, (), (), False, False, isolate)
+        result = RepairResult(
+            initial,
+            initial,
+            (),
+            (),
+            False,
+            False,
+            using_temporary,
+            project_root=root,
+            workspace_kind=workspace_kind,
+            repository_root=git_status.repository_root,
+            baseline_commit=git_status.head_commit,
+        )
         if save_report:
             result = replace(
                 result,
@@ -336,6 +438,7 @@ def repair_project(
             )
         error = RepairEnvironmentError(environment_issue)
         setattr(error, "report_path", result.report_path)
+        cleanup_after_error(error)
         raise error
 
     current = initial
@@ -348,20 +451,7 @@ def repair_project(
     verification_failures: list[VerificationFailure] = []
     proposal_fingerprints: set[str] = set()
     seen_file_versions: dict[str, set[str]] = {}
-    temporary: tempfile.TemporaryDirectory[str] | None = None
-    work_root = root
     original_files: dict[str, bytes] = {}
-    using_temporary = isolate or not apply
-    if using_temporary:
-        temporary = tempfile.TemporaryDirectory(prefix="autofix-repair-")
-        work_root = Path(temporary.name) / "workspace"
-        shutil.copytree(root, work_root, ignore=_workspace_ignore)
-
-    def cleanup() -> None:
-        """Release the disposable workspace after every exit path."""
-
-        if temporary is not None:
-            temporary.cleanup()
 
     def finish(
         *,
@@ -382,6 +472,10 @@ def repair_project(
             using_temporary,
             tuple(rejections),
             tuple(verification_failures),
+            project_root=root,
+            workspace_kind=workspace_kind,
+            repository_root=git_status.repository_root,
+            baseline_commit=git_status.head_commit,
         )
         if save_report:
             result = replace(
@@ -490,7 +584,7 @@ def repair_project(
                 seen_file_versions[change.relative_path].add(
                     hashlib.sha256(change.replacement.encode("utf-8")).hexdigest()
                 )
-            current = build_runner(work_root, steps, timeout_seconds=timeout_seconds)
+            current = run_workspace_build()
             if current.succeeded:
                 all_changes.extend(changes)
                 final_changes: tuple[ValidatedChange, ...] = tuple(all_changes)
@@ -552,10 +646,10 @@ def repair_project(
                 current = initial
             else:
                 all_changes.extend(changes)
-    except Exception:
+    except BaseException as exc:
         if backups and not keep_failed and not using_temporary:
             restore_files(backups)
-        cleanup()
+        cleanup_after_error(exc)
         raise
 
     if not backups and last_rejection is not None:

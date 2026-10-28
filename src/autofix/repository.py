@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,10 @@ from autofix.runtime.tools import find_executable
 
 class GitInspectionError(RuntimeError):
     """Raised when Git is present but repository metadata cannot be inspected."""
+
+
+class GitWorktreeError(RuntimeError):
+    """Raised when an isolated Git worktree cannot be created or removed."""
 
 
 @dataclass(frozen=True)
@@ -103,7 +108,62 @@ class GitWorkspaceStatus:
         }
 
 
-def _run_git(git: str, root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+@dataclass
+class DetachedGitWorktree:
+    """A temporary detached worktree rooted at an inspected baseline commit."""
+
+    git: str
+    repository_root: Path
+    workspace_root: Path
+    project_root: Path
+    baseline_commit: str
+    _temporary: tempfile.TemporaryDirectory[str]
+    _closed: bool = False
+
+    def close(self) -> None:
+        """Remove this worktree's metadata and files without global pruning."""
+
+        if self._closed:
+            return
+        self._closed = True
+        errors: list[str] = []
+        try:
+            removed = _run_git(
+                self.git,
+                self.repository_root,
+                "worktree",
+                "remove",
+                "--force",
+                str(self.workspace_root),
+                timeout_seconds=60,
+            )
+            if removed.returncode != 0:
+                detail = (
+                    removed.stderr.strip()
+                    or removed.stdout.strip()
+                    or "unknown Git error"
+                )
+                errors.append(f"Git worktree remove failed: {detail}")
+        except GitInspectionError as exc:
+            errors.append(str(exc))
+        try:
+            self._temporary.cleanup()
+        except OSError as exc:
+            errors.append(f"temporary file cleanup failed: {exc}")
+        if errors:
+            raise GitWorktreeError(
+                "Unable to fully clean temporary Git worktree: "
+                + "; ".join(errors)
+                + ". Inspect 'git worktree list' and prune only the stale AutoFix entry."
+            )
+
+
+def _run_git(
+    git: str,
+    root: Path,
+    *args: str,
+    timeout_seconds: float = 10,
+) -> subprocess.CompletedProcess[str]:
     """Run a bounded, non-shell Git metadata command."""
 
     try:
@@ -113,7 +173,7 @@ def _run_git(git: str, root: Path, *args: str) -> subprocess.CompletedProcess[st
             text=True,
             encoding="utf-8",
             errors="surrogateescape",
-            timeout=10,
+            timeout=timeout_seconds,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -202,4 +262,90 @@ def inspect_git_workspace(path: Path | str) -> GitWorkspaceStatus:
         head_commit=head_commit,
         detached=head_commit is not None and branch is None,
         changes=_parse_porcelain(status_output),
+    )
+
+
+def validate_git_repair_workspace(path: Path | str) -> GitWorkspaceStatus:
+    """Return Git state or reject a repository without a safe committed baseline."""
+
+    status = inspect_git_workspace(path)
+    if not status.is_repository or status.direct_apply_policy == "allowed":
+        return status
+    if status.direct_apply_policy == "blocked-dirty":
+        changed = ", ".join(change.path for change in status.changes[:5])
+        suffix = " ..." if len(status.changes) > 5 else ""
+        detail = f" Changed paths: {changed}{suffix}." if changed else ""
+        raise GitWorktreeError(
+            "Git worktree is dirty; AutoFix will not stash, clean, or overwrite "
+            f"uncommitted work.{detail} Commit or stash it explicitly, then retry."
+        )
+    raise GitWorktreeError(
+        "Git repository has no baseline commit; create an initial commit before repair."
+    )
+
+
+def create_detached_worktree(status: GitWorkspaceStatus) -> DetachedGitWorktree:
+    """Create a detached worktree for a clean repository and requested subpath."""
+
+    if (
+        status.direct_apply_policy != "allowed"
+        or status.repository_root is None
+        or status.head_commit is None
+    ):
+        raise GitWorktreeError(
+            f"Git workspace policy does not allow isolation: {status.direct_apply_policy}"
+        )
+    git = find_executable("git")
+    if git is None:
+        raise GitWorktreeError("Git became unavailable before worktree creation")
+    try:
+        relative_project = status.requested_root.relative_to(status.repository_root)
+    except ValueError as exc:
+        raise GitWorktreeError("Requested project is outside the Git repository root") from exc
+
+    temporary = tempfile.TemporaryDirectory(prefix="autofix-worktree-")
+    workspace_root = Path(temporary.name) / "workspace"
+    try:
+        created = _run_git(
+            git,
+            status.repository_root,
+            "worktree",
+            "add",
+            "--detach",
+            str(workspace_root),
+            status.head_commit,
+            timeout_seconds=120,
+        )
+    except GitInspectionError as exc:
+        temporary.cleanup()
+        raise GitWorktreeError(f"Unable to create temporary Git worktree: {exc}") from exc
+    if created.returncode != 0:
+        temporary.cleanup()
+        detail = created.stderr.strip() or created.stdout.strip() or "unknown Git error"
+        raise GitWorktreeError(f"Unable to create temporary Git worktree: {detail}")
+    project_root = (workspace_root / relative_project).resolve()
+    if not project_root.is_dir():
+        handle = DetachedGitWorktree(
+            git,
+            status.repository_root,
+            workspace_root,
+            project_root,
+            status.head_commit,
+            temporary,
+        )
+        error = GitWorktreeError(
+            f"Project subdirectory is missing from baseline commit: {relative_project}"
+        )
+        try:
+            handle.close()
+        except GitWorktreeError as cleanup_error:
+            error.add_note(f"Worktree cleanup also failed: {cleanup_error}")
+        raise error
+    return DetachedGitWorktree(
+        git,
+        status.repository_root,
+        workspace_root,
+        project_root,
+        status.head_commit,
+        temporary,
     )

@@ -5,8 +5,16 @@
 ### Added
 
 - 新增只读 `autofix git-status [PATH]`，报告 Git 可用性、仓库根目录、分支或 detached HEAD、基线 commit、tracked/untracked 变更和 direct-apply 策略。
-- `autofix git-status --require-clean` 在非 Git 目录或脏工作区返回 1，可作为 CI 和未来 repair/worktree 的前置门禁；`--json` 输出稳定结构。
+- `autofix git-status --require-clean` 在非 Git 目录或脏工作区返回 1，可作为 CI 和 repair/worktree 的前置门禁；`--json` 输出稳定结构。
 - 新增真实临时仓库测试，覆盖非 Git、干净/未提交基线仓库、tracked/untracked 修改、rename、detached HEAD 和 CLI 干净门禁。
+- Git repair 默认从 HEAD 创建 detached 临时 worktree；基线复现、模型编辑和完整验证都在其中运行，仓库子目录会映射到 worktree 内的对应位置。
+- repair report 升级为 v2，新增 workspace 类型、仓库根目录和基线 commit；临时执行路径不会写入持久报告。
+
+### Safety
+
+- 脏 Git 仓库和尚无 commit 的仓库在构建、Ollama 请求和源码修改前停止；AutoFix 不自动 stash、clean、commit、push 或 merge。
+- worktree 在成功、验证失败、模型异常和 `KeyboardInterrupt` 后定向移除；清理失败不会自动全局 prune，以免影响用户的其他 worktree。
+- 非 Git 项目继续使用临时副本；验证成功的 `--apply` 仍需通过原文件字节级并发检查才写回目标文件。
 
 ### CI
 
@@ -14,7 +22,7 @@
 
 ### Verified
 
-- Windows 本机 171 项 pytest、`compileall`、Python/Node 复杂 fixture 基线和 workflow YAML 检查通过。
+- Windows 本机 180 项 pytest、`compileall`、Python/Node 复杂 fixture 基线和 workflow YAML 检查通过。
 - 隔离 PEP 517 wheel 构建通过，并确认 `autofix/repository.py` 已包含在生成包中。
 
 ### Fixed

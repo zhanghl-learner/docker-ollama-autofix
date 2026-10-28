@@ -5,7 +5,7 @@
 ## 1. 先理解三个原则
 
 1. `autofix run` 只负责执行和记录，不会调用模型，也不会修改源码。
-2. `autofix repair` 默认是安全预览：所有修改和验证发生在临时副本，原项目不变；验证成功才会生成 plan。
+2. `autofix repair` 默认是安全预览：Git 项目在 detached worktree、非 Git 项目在临时副本中修改和验证，原项目不变；验证成功才会生成 plan。
 3. 推荐先预览，再用 `autofix apply-plan` 应用已经看过的精确结果。直接使用 `--apply` 更快，但应当配合版本控制。
 
 AutoFix 修复的是“被实际命令暴露出来的错误”。如果命令只做语法编译，例如 `python -m compileall -q .`，运行时的 `NameError` 不会出现，也就没有可供修复的失败。可执行脚本应使用 `python 文件名.py`，有测试的项目应使用测试命令。
@@ -131,7 +131,9 @@ autofix offline-check .
 autofix run . --docker
 ```
 
-`git-status` 是只读检查，不会执行 checkout、stash、commit 或清理文件。它报告仓库根目录、分支或 detached HEAD、基线 commit，以及 tracked/untracked 变更；`--require-clean` 在非 Git 目录或脏工作区返回退出码 1，适合在 CI 和修复前置步骤中使用。当前版本只建立状态与策略契约，尚未让 `repair --apply` 自动创建 worktree；在下一切片完成前，仍应由开发者保持工作区干净。
+`git-status` 是只读检查，不会执行 checkout、stash、commit 或清理文件。它报告仓库根目录、分支或 detached HEAD、基线 commit，以及 tracked/untracked 变更；`--require-clean` 在非 Git 目录或脏工作区返回退出码 1，适合在 CI 和修复前置步骤中使用。
+
+`repair` 和 `apply-plan` 对 Git 项目强制使用已提交的干净基线：脏工作区或尚无 commit 的仓库会在构建、Ollama 请求和源码修改前停止，AutoFix 不会自动 stash、clean 或提交。干净仓库会从当前 HEAD 创建 detached 临时 worktree，初始失败复现、模型编辑和完整验证都在其中完成；成功预览只输出 plan，成功 `--apply` 才在字节级并发检查后写回已验证目标文件。非 Git 项目继续使用临时目录副本。
 
 如果 `run` 已通过，项目没有需要修复的已知构建错误。如果失败，执行安全预览：
 
@@ -143,7 +145,7 @@ autofix repair . --docker --max-attempts 3
 
 - 模型提议的摘要；
 - 每个文件的 unified diff；
-- 已在临时副本中验证通过的结论；
+- 已在 detached Git worktree（非 Git 项目为临时副本）中验证通过的结论；
 - `.autofix\plans\...json` 方案路径；
 - 原项目未被修改的提示。
 
@@ -168,7 +170,7 @@ git diff
 autofix repair . --docker --apply --max-attempts 3
 ```
 
-`repair --apply` 默认仍使用 `--isolate`。它先在临时副本里完成所有尝试，最终通过后才把合并后的结果写回原项目；写回前还会检查原文件在修复过程中是否被其他程序修改。
+`repair --apply` 默认仍使用 `--isolate`。Git 项目在 detached worktree、非 Git 项目在临时副本里完成所有尝试；最终通过后才把合并结果写回原项目，写回前还会检查原文件在修复过程中是否被其他程序修改。
 
 ## 6. 给单个项目固定配置
 
@@ -364,6 +366,8 @@ autofix run . --docker `
 
 默认策略：
 
+- Git 仓库必须干净且存在 HEAD commit；不自动 stash、clean、commit、push 或 merge；
+- Git 的初始失败复现、模型修改和验证在 detached 临时 worktree 完成；
 - 测试文件只作为行为上下文，不允许模型修改；
 - 只允许修改项目内已经存在的 UTF-8 源码或受支持配置文件；
 - 一次提议最多 20 个行级编辑、最多 5 个文件，总编辑文本最多 200,000 字符；
@@ -382,6 +386,8 @@ autofix repair . --no-isolate
 ```
 
 `--keep-failed` 仅适用于 `--no-isolate`，会保留验证失败的修改；默认隔离模式中失败副本会被丢弃，因此两者冲突。
+
+若异常退出时 Git 提示 worktree 清理失败，先运行 `git worktree list` 确认只剩失效的 `autofix-worktree-*` 路径，再执行 `git worktree prune`。AutoFix 不会自动全局 prune，以免影响用户创建的其他 worktree。
 
 ## 11. 报告、方案和撤销
 

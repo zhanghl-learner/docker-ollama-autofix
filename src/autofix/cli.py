@@ -41,7 +41,12 @@ from autofix.evaluation import (
     load_evaluation_manifest,
 )
 from autofix.models import BuildStep, ProjectInspection
-from autofix.repository import GitInspectionError, inspect_git_workspace
+from autofix.repository import (
+    GitInspectionError,
+    GitWorktreeError,
+    inspect_git_workspace,
+    validate_git_repair_workspace,
+)
 from autofix.config import (
     AutoFixConfig,
     ConfigError,
@@ -1124,6 +1129,12 @@ def repair(
         console.print("[red]No supported build system detected; pass --command explicitly.[/red]")
         raise typer.Exit(code=2)
 
+    try:
+        validate_git_repair_workspace(inspection.root)
+    except (GitInspectionError, GitWorktreeError) as exc:
+        console.print(f"[red]Repair stopped: {exc}[/red]")
+        raise typer.Exit(code=2) from exc
+
     client = OllamaClient(ollama_url)
     try:
         if isolate and keep_failed:
@@ -1219,7 +1230,14 @@ def repair(
             docker_config=plan_docker_config,
         )
         console.print(f"Repair plan: {plan_path}")
-        console.print("[green]Preview verified in an isolated project copy; the original project was unchanged.[/green]")
+        location = (
+            "a detached Git worktree"
+            if result.workspace_kind == "git-worktree"
+            else "an isolated project copy"
+        )
+        console.print(
+            f"[green]Preview verified in {location}; the original project was unchanged.[/green]"
+        )
         docker_option = " --docker" if docker else ""
         console.print(
             f"[yellow]Or apply this exact reviewed proposal with: autofix apply-plan \"{plan_path}\" --project \"{inspection.root}\"{docker_option}[/yellow]"

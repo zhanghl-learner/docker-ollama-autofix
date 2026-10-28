@@ -34,7 +34,7 @@ flowchart TB
         CLI[Typer CLI<br/>cli.py]
         CONFIG[全局与项目配置<br/>config.py]
         DETECT[项目及工具链检测<br/>detectors/project.py]
-        GIT[只读 Git 工作区状态<br/>repository.py]
+        GIT[Git 状态与 worktree 生命周期<br/>repository.py]
     end
 
     subgraph Orchestration[编排层]
@@ -53,6 +53,7 @@ flowchart TB
     end
 
     subgraph Execution[执行层]
+        WORKTREE[detached Git worktree<br/>或非 Git 临时副本]
         LOCAL[本机无 shell 执行<br/>builders/runner.py]
         DOCKER[受限 Docker 执行<br/>builders/docker.py]
         RESULT[BuildResult]
@@ -73,12 +74,14 @@ flowchart TB
     CONFIG --> STEPS
     DETECT --> STEPS
     STEPS --> REPAIR
+    GIT --> REPAIR
+    REPAIR --> WORKTREE
+    WORKTREE --> LOCAL
+    WORKTREE --> DOCKER
     REPAIR --> CONTEXT
     CONTEXT --> OLLAMA
     OLLAMA --> PATCH
     PATCH --> REPAIR
-    REPAIR --> LOCAL
-    REPAIR --> DOCKER
     LOCAL --> RESULT
     DOCKER --> RESULT
     RESULT --> DIAG
@@ -140,13 +143,15 @@ src/autofix/
     └── tools.py            # PATH 与 Windows 标准安装位置发现
 ```
 
-`tests/` 按上述模块覆盖检测、配置、执行、Docker 参数、模型协议、补丁安全、隔离提交、plan、rollback、离线检查和 bundle。
+`tests/` 按上述模块覆盖检测、配置、执行、Git 状态/worktree 生命周期、Docker 参数、模型协议、补丁安全、隔离提交、plan、rollback、离线检查和 bundle。
 
-### 3.1 Git 状态是只读安全输入
+### 3.1 Git 状态与隔离工作区
 
 `inspect_git_workspace()` 只调用无 shell、带超时的 Git 元数据命令。仓库根目录来自 `git rev-parse --show-toplevel`，分支使用 `symbolic-ref`，HEAD 使用 `rev-parse --verify HEAD`，变更使用 NUL 分隔的 `status --porcelain=v1 -z --untracked-files=all`。NUL 格式避免空格、引号和换行路径造成普通行解析歧义；解析器保留状态码前导空格，并记录 rename/copy 的原路径。
 
-`GitWorkspaceStatus` 明确区分 `git-unavailable`、`not-repository`、`clean` 和 `dirty`。`direct_apply_policy` 当前是下一阶段门禁所需的只读决策数据：有基线 commit 的干净仓库为 `allowed`，脏仓库为 `blocked-dirty`，尚无 commit 的仓库为 `blocked-unborn`，非 Git 项目为 `unversioned`。本切片没有执行 checkout、stash、commit、worktree、push 或修改源码，也尚未改变现有 repair/apply 行为。
+`GitWorkspaceStatus` 明确区分 `git-unavailable`、`not-repository`、`clean` 和 `dirty`。有基线 commit 的干净仓库为 `allowed`，脏仓库为 `blocked-dirty`，尚无 commit 的仓库为 `blocked-unborn`，非 Git 项目为 `unversioned`。CLI 在创建 Ollama 客户端前执行同一策略；核心 API 再次校验，避免其他调用方绕过门禁。
+
+`create_detached_worktree()` 从已记录的 HEAD commit 创建无分支临时 worktree。若用户传入仓库子目录，repair 使用 worktree 中对应的相对子目录。基线构建、上下文读取、模型编辑和验证都发生在 worktree；成功 `--apply` 仍通过原文件 bytes 检查和 `ValidatedChange` 写回，不执行 commit、push 或 merge。正常、验证失败、模型异常和 `KeyboardInterrupt` 都会执行定向 `git worktree remove --force`；清理失败会明确要求检查注册项，但不会自动全局 prune 用户的其他 worktree。
 
 ### 3.2 评测层不是另一套修复器
 
@@ -271,7 +276,7 @@ docker run --rm --pull never --init
 
 `HOME`、`XDG_CACHE_HOME` 和 Python bytecode cache 都指向 `/tmp`。镜像名、内存格式和资源范围在生成命令前校验。包含逗号的 Windows 源路径因 Docker mount 语法歧义而被拒绝。
 
-需要注意两个不同层次的副本：Docker 执行器保护项目免受“构建过程写入”；repair 的临时副本保护项目免受“模型编辑与失败尝试写入”。二者同时启用时，模型在 repair 工作副本中修改，构建又在 Docker 的第二层副本中运行。
+需要注意两个不同层次的隔离：Docker 执行器保护 repair 工作区免受“构建过程写入”；repair 的 detached Git worktree（非 Git 项目为临时副本）保护原项目免受“模型编辑与失败尝试写入”。二者同时启用时，模型在 repair 隔离工作区中修改，构建又在 Docker 的第二层副本中运行。
 
 ## 7. 环境故障分类
 
@@ -394,11 +399,13 @@ Ollama URL 默认为 `http://127.0.0.1:11434`，数据不需要发往云端。�
 `repair_project()` 的核心伪代码如下：
 
 ```text
-initial = build(original)
+git = validate_git_policy(original)
+work_root = detached_worktree(HEAD)  # 干净 Git 仓库
+            or temporary_copy(original)  # 非 Git 项目
+
+initial = build(work_root)
 if initial passes: report and return
 if confident_environment_failure(initial): report and stop
-
-work_root = temporary_copy(original)  # preview 或默认 isolate
 current = initial
 
 for attempt in 1..max_attempts:
@@ -418,7 +425,7 @@ for attempt in 1..max_attempts:
         report and return success
     previous_feedback = current failure
 
-discard temporary copy or restore direct-mode backups
+remove detached worktree / discard copy / restore direct-mode backups
 report failure
 ```
 
@@ -437,7 +444,8 @@ sequenceDiagram
     participant A as Audit store
 
     U->>C: autofix repair PROJECT
-    C->>B: 执行绑定的 BuildStep 矩阵
+    C->>W: 校验 Git 状态并创建 detached worktree/临时副本
+    C->>B: 在隔离工作区执行绑定的 BuildStep 矩阵
     B-->>C: 初始 BuildResult 失败
     C->>D: 分类环境故障
     alt 确定是环境故障
@@ -445,7 +453,6 @@ sequenceDiagram
         C->>A: 写 repair 报告，proposals = 0
         C-->>U: 退出 2，源码不变
     else 可进入代码修复
-        C->>W: 创建项目临时副本
         loop 直到成功或达到 max-attempts
             C->>O: 失败信息 + 受限源码 + 上轮反馈
             O-->>C: 结构化行编辑 proposal
@@ -454,7 +461,7 @@ sequenceDiagram
                 P-->>C: 精确拒绝原因
             else 静态校验通过
                 P->>W: 只修改声明的行
-                C->>B: 在隔离副本执行同一矩阵
+                C->>B: 在隔离工作区执行同一矩阵
                 B-->>C: 新 BuildResult
             end
         end
@@ -468,7 +475,7 @@ sequenceDiagram
     end
 ```
 
-预览路径始终创建工作副本，即使没有显式指定 `--isolate`。0.19.0 起，每个候选都从同一个初始故障基线开始；验证失败的候选会先记录 diagnosis、精确 diff、构建结果和新增失败测试，再把工作副本恢复到基线。下一轮不会继承错误源码，但会收到最近三轮累计失败证据。
+预览路径始终创建隔离工作区，即使没有显式指定 `--isolate`。Git 项目使用当前 HEAD 的 detached worktree，并要求整个仓库干净；非 Git 项目回退临时副本。0.19.0 起，每个候选都从同一个初始故障基线开始；验证失败的候选会先记录 diagnosis、精确 diff、构建结果和新增失败测试，再把工作区恢复到基线。下一轮不会继承错误源码，但会收到最近三轮累计失败证据。
 
 这种“源码状态独立、证据状态累积”的策略防止早期错误修改污染后续方案，也使最终 plan/diff 只包含一个从原文件到验证通过状态的变化。代价是目前不适合必须分多步、且每个中间步骤单独不能通过完整矩阵的迁移任务；这类任务需要未来显式的分阶段计划协议，不能通过隐式叠加失败候选实现。
 
@@ -478,11 +485,13 @@ sequenceDiagram
 
 `using_temporary = isolate or not apply`，因此：
 
-- 默认预览永远使用临时副本；
-- 默认 `repair --apply` 因 `--isolate` 也使用临时副本；
+- 默认预览永远使用 detached Git worktree 或非 Git 临时副本；
+- 默认 `repair --apply` 因 `--isolate` 也使用上述隔离工作区；
 - 只有显式 `--apply --no-isolate` 才直接修改原项目。
 
-隔离成功后，代码逐文件把“原始项目内容”和“临时副本最终内容”合并为 `ValidatedChange`。若要应用，会比较修复开始时保存的原始 bytes 与当前目标 bytes；任一文件在期间被编辑，就抛出错误而不是覆盖并发工作。
+隔离成功后，代码逐文件把“原始项目内容”和“隔离工作区最终内容”合并为 `ValidatedChange`。若要应用，会比较修复开始时保存的原始 bytes 与当前目标 bytes；任一文件在期间被编辑，就抛出错误而不是覆盖并发工作。
+
+repair report v2 的 `workspace` 记录 `kind`、`repository_root` 和 `baseline_commit`。报告中的项目/build root 统一指向真实项目，不泄露或引用已经删除的临时路径。plan 对 Git 基线和最终 diff digest 的绑定仍属于下一切片。
 
 直接模式会在首次修改前保存 bytes。异常或最终验证失败时默认恢复所有备份；只有显式 `--keep-failed` 才保留失败修改。
 
@@ -721,13 +730,13 @@ autofix run . --docker
 - 小模型可能反复给出安全但无效或被拒绝的提议；
 - 构建通过只能证明配置的门禁通过；若项目重视格式，还应把 formatter/linter 纳入 `build.commands`；
 - Docker 镜像必须提前包含全部离线依赖；
-- 临时副本不是 Git worktree，不保留被忽略的生成状态和符号链接；
+- Git worktree 只包含 HEAD 已跟踪内容，不携带被忽略的依赖/生成状态；非 Git 临时副本还会排除缓存、构建目录、依赖目录和符号链接；
 - rollback 依赖当前内容精确匹配已应用 diff；
 - Windows 离线 bootstrap 当前锁定 Python 3.11 wheelhouse。
 
 下一阶段定义为“真实仓库安全接入与规模化评测”。优先级按风险依赖排序，而不是按功能数量排序：
 
-1. **Git 安全接入**：识别脏工作区，默认拒绝覆盖未提交修改；在临时 branch/worktree 中修复，并输出可审查 patch、commit 或审批对象。
+1. **Git 溯源绑定**：在已有脏工作区门禁与 detached worktree 隔离上，把基线 commit、仓库身份和最终 diff digest 绑定到 plan；成功结果只输出可审查 patch/可选 commit，不自动 push 或 merge。
 2. **CI 契约**：稳定退出码和 JSON schema，提供无交互模式与 GitHub Actions 示例，但默认只产出候选结果，不自动合并。
 3. **规模化评测**：实现聚合 runner/scoreboard；扩展 Go、Rust、Java、C++ 与高级 Python/Node 用例；按模型、工具链、runner 和契约 hash 分组。
 4. **安全加固**：命令策略、非 root 容器、资源和超时上限、敏感信息脱敏及生成物审计。

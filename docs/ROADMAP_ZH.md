@@ -157,13 +157,15 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 
 1. [x] 定义只读 `GitWorkspaceStatus` / `GitChange` 数据模型和 direct-apply 策略；新增 `autofix git-status`，不修改 Git 或源码；
 2. [x] 覆盖非 Git、干净 Git、tracked/untracked 脏工作区和 detached HEAD；CI 使用 `--require-clean` 验证干净检出契约；
-3. [ ] 在 preview 路径接入 worktree，确保失败不触碰原工作树；
-4. 把基线 commit 与 diff hash 写入 repair/plan 报告；
+3. [x] 在 preview/default-isolate 路径接入 detached worktree；基线、编辑和验证均不在原工作树运行，失败、异常和取消路径清理注册项；
+4. [ ] repair report v2 已记录基线 commit 与 workspace 类型；下一步把 Git 身份和最终 diff hash 绑定到 plan，并完成读取兼容策略；
 5. 最后才开放显式 apply/commit，并保留人工确认边界。
 
-这一顺序能够先固定安全契约，再实现外部行为。前两项已经形成只读垂直切片；下一项不得通过自动 stash、清理或覆盖来处理脏工作区。每个步骤都必须保持现有测试和多语言 fixture 基线不退化。
+这一顺序能够先固定安全契约，再实现外部行为。前三项已经形成 Git 检测→门禁→隔离验证的垂直切片；实现没有通过自动 stash、清理或覆盖来处理脏工作区。每个步骤都必须保持现有测试和多语言 fixture 基线不退化。
 
 第一切片已在 2026-10-28 完成本机验证：171 项测试、两个复杂 fixture 基线、源码编译和 wheel 内容检查通过；GitHub Actions 结果需在推送本次提交后单独记录，不能沿用上一次提交的绿色状态。
+
+第二切片已在 2026-10-28 完成本机验证：180 项测试覆盖 worktree 成功、失败、脏/未提交基线拒绝、模型异常、`KeyboardInterrupt`、构建超时、子目录映射和验证后写回；两个复杂 fixture 基线及源码编译继续通过。新提交仍需由 GitHub Actions 在 Windows/Linux 上独立确认。
 
 ## 8. 文档维护规则
 

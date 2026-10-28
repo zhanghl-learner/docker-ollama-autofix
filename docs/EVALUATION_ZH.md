@@ -31,6 +31,8 @@ autofix evaluate examples\complex-validation\python-order-service `
 
 该命令内部固定使用 `apply=false` 和 `isolate=true`。成功方案只用于计分，不会写回 fixture。需要容器工具链时添加 `--docker --docker-image <image>`；容器默认断网。
 
+若 fixture 位于 Git 仓库中，`--repair` 要求整个仓库已提交且工作区干净，并从当前 HEAD 创建 detached 临时 worktree；脏仓库和尚无 commit 的仓库会在 Ollama 修复前停止。纯 baseline 评测仍只复现契约，不进入 repair worktree。非 Git fixture 继续使用临时目录副本。该策略确保批量评测不会通过自动 stash、clean 或覆盖来隐藏维护者的本地修改。
+
 ## 3. 清单格式
 
 每个用例根目录放置 `autofix-eval.yml`：
