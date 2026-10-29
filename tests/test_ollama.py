@@ -88,6 +88,10 @@ def test_model_schema_excludes_protected_test_paths(monkeypatch: pytest.MonkeyPa
         model="test",
         failure="assertion failed",
         files={"calculator.py": "value = 1\n", "test_calculator.py": "assert False\n"},
+        context_reasons={
+            "calculator.py": "local-import:test_calculator.py",
+            "test_calculator.py": "build-output",
+        },
     )
 
     schema = captured["format"]
@@ -97,6 +101,9 @@ def test_model_schema_excludes_protected_test_paths(monkeypatch: pytest.MonkeyPa
     assert "READ-ONLY TEST: test_calculator.py" in prompt
     assert "guard excludes the failing input" in prompt
     assert "inner conditional whose predicate is already guaranteed" in prompt
+    assert "CONTEXT SELECTION (metadata only" in prompt
+    assert "calculator.py: local-import:test_calculator.py" in prompt
+    assert "test_calculator.py: build-output" in prompt
     assert captured["options"] == {"temperature": 0}
 
     OllamaClient().propose(

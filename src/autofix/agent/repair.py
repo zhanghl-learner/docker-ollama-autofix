@@ -13,7 +13,11 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from autofix.agent.artifacts import save_standalone_patch
-from autofix.agent.context import collect_source_context, format_failure
+from autofix.agent.context import (
+    ContextSelection,
+    collect_source_context_with_metadata,
+    format_failure,
+)
 from autofix.agent.diagnostics import RepairEnvironmentError, environment_failure
 from autofix.agent.ollama import RepairProposal
 from autofix.agent.patches import (
@@ -67,6 +71,7 @@ class RepairClient(Protocol):
         model: str,
         failure: str,
         files: dict[str, str],
+        context_reasons: dict[str, str] | None = None,
         previous_attempt: str | None = None,
         allow_test_changes: bool = False,
     ) -> RepairProposal:
@@ -97,6 +102,7 @@ class RepairResult:
     baseline_commit: str | None = None
     repository_fingerprint: str | None = None
     project_subpath: str | None = None
+    context_selections: tuple[tuple[ContextSelection, ...], ...] = ()
 
     @property
     def succeeded(self) -> bool:
@@ -171,6 +177,13 @@ class RepairResult:
             "verification_failures": [
                 failure.to_dict() for failure in self.verification_failures
             ],
+            "context_selections": [
+                {
+                    "attempt": attempt,
+                    "files": [selection.to_dict() for selection in selections],
+                }
+                for attempt, selections in enumerate(self.context_selections, 1)
+            ],
             "changes": [
                 {
                     "path": change.relative_path,
@@ -194,6 +207,7 @@ class RepairProgressEvent:
     changes: tuple[ValidatedChange, ...] = ()
     build: BuildResult | None = None
     reason: str | None = None
+    context_selections: tuple[ContextSelection, ...] = ()
 
 
 RepairProgressCallback = Callable[[RepairProgressEvent], None]
@@ -405,19 +419,21 @@ def repair_project(
         changes: tuple[ValidatedChange, ...] = (),
         build: BuildResult | None = None,
         reason: str | None = None,
+        context_selections: tuple[ContextSelection, ...] = (),
     ) -> None:
         """Publish progress without coupling repair orchestration to a UI."""
 
         if progress_callback is not None:
             progress_callback(
                 RepairProgressEvent(
-                    phase,
-                    attempt,
-                    max_attempts,
-                    proposal,
-                    changes,
-                    build,
-                    reason,
+                    phase=phase,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    proposal=proposal,
+                    changes=changes,
+                    build=build,
+                    reason=reason,
+                    context_selections=context_selections,
                 )
             )
 
@@ -545,6 +561,7 @@ def repair_project(
     proposal_fingerprints: set[str] = set()
     seen_file_versions: dict[str, set[str]] = {}
     original_files: dict[str, bytes] = {}
+    context_selections: list[tuple[ContextSelection, ...]] = []
 
     def finish(
         *,
@@ -584,6 +601,7 @@ def repair_project(
             project_subpath=git_status.project_subpath,
             patch_path=patch_path,
             patch_sha256=patch_sha256,
+            context_selections=tuple(context_selections),
         )
         if save_report:
             result = replace(
@@ -593,12 +611,20 @@ def repair_project(
 
     try:
         for attempt in range(1, max_attempts + 1):
-            files = collect_source_context(work_root, current)
+            context = collect_source_context_with_metadata(work_root, current)
+            files = context.files
+            context_selections.append(context.selections)
+            emit(
+                "context_selected",
+                attempt=attempt,
+                context_selections=context.selections,
+            )
             emit("model_waiting", attempt=attempt)
             proposal = client.propose(
                 model=model,
                 failure=format_failure(current),
                 files=files,
+                context_reasons={item.path: item.reason for item in context.selections},
                 previous_attempt=previous_attempt,
                 allow_test_changes=allow_test_changes,
             )

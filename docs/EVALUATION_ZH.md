@@ -188,10 +188,12 @@ repair 用例失败不一定存在异常：候选可能通过全部静态门禁�
 
 保存的证据分为两层：
 
-- `suite.json` 与 `cases/*.json`：`evaluation.repair_details` 保存完整 `RepairResult`，包括 proposal 元数据、静态拒绝、每轮 diagnosis、实际 unified diff、完整 `BuildResult` 和 stdout/stderr；
+- `suite.json` 与 `cases/*.json`：`evaluation.repair_details` 保存完整 `RepairResult`，包括每轮 `context_selections`、proposal 元数据、静态拒绝、diagnosis、实际 unified diff、完整 `BuildResult` 和 stdout/stderr；
 - `suite.md`：为每个失败 repair 展开尝试编号、原因、diff、失败步骤和输出；单个 diff 或输出超过 4000 字符时截断，并提示查看 JSON。
 
 这些证据直接来自内存中的隔离修复结果。`evaluate-suite` 仍以 `save_report=False` 调用单用例评测，所以不会为了取得细节而在每个 fixture 下额外生成 `.autofix/repairs`；最终只原子发布套件目录。静态拒绝与环境错误若已经形成结构化 repair 结果，也通过同一字段保留。原 fixture 源码仍逐字节不变。
+
+`context_selections` 只记录路径、选择原因、测试属性、发送字符数和截断状态，不重复保存源码内容。对比两个版本时可以检查必改文件是否进入上下文、排序是否提前以及字符预算是否减少；只有在相同 `case.name`、`contract_sha256`、模型和 runner 下，才应把成功率变化归因于上下文策略。
 
 后续评测工作按以下顺序推进：
 

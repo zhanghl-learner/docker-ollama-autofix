@@ -142,6 +142,19 @@ class _SuiteProgressRenderer:
                 f"[cyan]{prefix}: preparing isolation and confirming baseline "
                 f"({elapsed:.1f}s)...[/cyan]"
             )
+        elif repair.phase == "context_selected":
+            self.stop_wait()
+            selected = ", ".join(
+                f"{item.path} ({item.reason})"
+                for item in repair.context_selections[:6]
+            )
+            remainder = len(repair.context_selections) - 6
+            if remainder > 0:
+                selected += f", +{remainder} more"
+            console.print(
+                f"[cyan]{prefix}: attempt {repair.attempt} context — "
+                f"{selected or 'no readable project source'}[/cyan]"
+            )
         elif repair.phase == "model_waiting":
             self.start_wait(
                 f"[yellow]{prefix}: attempt {repair.attempt}/{repair.max_attempts}, "

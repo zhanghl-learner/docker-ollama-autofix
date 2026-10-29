@@ -104,6 +104,20 @@ def test_preview_retries_failed_build_and_returns_only_verified_final_diff(
     assert result.changes[0].original.replace("\r\n", "\n") == "value = 1\n"
     assert result.changes[0].replacement.replace("\r\n", "\n") == "value = 2\n"
     assert source.read_text(encoding="utf-8") == "value = 1\n"
+    assert client.calls[0]["context_reasons"] == {
+        "value.py": "project-source-fallback"
+    }
+    selections = result.to_dict()["context_selections"]
+    assert [item["attempt"] for item in selections] == [1, 2]
+    assert selections[0]["files"] == [
+        {
+            "path": "value.py",
+            "reason": "project-source-fallback",
+            "is_test": False,
+            "chars": 10,
+            "truncated": False,
+        }
+    ]
 
 
 def test_preview_returns_no_plan_changes_when_verification_fails(tmp_path: Path) -> None:

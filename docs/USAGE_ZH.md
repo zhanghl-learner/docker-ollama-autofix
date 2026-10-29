@@ -344,11 +344,13 @@ autofix evaluate-suite examples\complex-validation `
 
 每个有效用例仍通过 `evaluate_project()` 单独进行故障签名 preflight，并在 detached Git worktree 或非 Git 临时副本中修复；原 fixture 不写回。repair 聚合使用 JSON v2，记录模型、runner、尝试上限、首次通过率、平均尝试数、静态拒绝率、验证失败率、越界修改率和缺失必改文件率。baseline 继续使用兼容的 JSON v1。终端表格后的 `Failed case details` 显示完整失败摘要；逐用例 JSON 的 `evaluation.repair_details` 保存 proposal、静态拒绝和每轮验证失败的 diagnosis、diff、构建步骤与完整输出；Markdown 展开同样证据，但单段 diff/输出最多展示 4000 字符，完整内容以 JSON 为准。`--docker` 模式要求所有用例共享一个明确的 `--docker-image` 或套件级配置镜像；当前不会为混合语言用例自动切换多个镜像。
 
-人类可读模式默认启用实时进度：每个用例开始时显示基线复现；等待 Ollama 和运行验证期间保持动态 spinner；收到 proposal 后显示 summary、diagnosis、目标文件、起始行和替换行数；静态拒绝或验证失败立即输出原因。全部结束后，`Verified repair changes` 会直接打印每个成功用例最终通过验证的 unified diff。自动化不需要动态输出时使用 `--no-progress`；`--json` 会强制静默进度，只在 stdout 输出一个合法 JSON 文档。
+人类可读模式默认启用实时进度：每个用例开始时显示基线复现；请求 Ollama 前显示本轮上下文文件和 `build-output`、`local-import:<来源>` 或 `project-source-fallback` 选择原因；等待 Ollama 和运行验证期间保持动态 spinner；收到 proposal 后显示 summary、diagnosis、目标文件、起始行和替换行数；静态拒绝或验证失败立即输出原因。全部结束后，`Verified repair changes` 会直接打印每个成功用例最终通过验证的 unified diff。自动化不需要动态输出时使用 `--no-progress`；`--json` 会强制静默进度，只在 stdout 输出一个合法 JSON 文档。
 
 0.19.0 起，每个模型候选必须包含可审计的 `diagnosis`。候选通过静态校验但构建失败时，AutoFix 保存本轮 diff、构建输出和新增失败测试，然后把工作区恢复到初始故障状态；下一轮从干净源码重新修复，而不是叠加在错误修改上。完全重复的编辑和恢复到已验证失败状态的循环会被拒绝。CLI 的 `verification failures` 表示“能够应用但未通过构建”的候选数量，它与静态 `rejections` 是不同指标。
 
 当原失败在候选验证后仍存在，重试上下文会明确标注 persistent failure，并要求模型检查失败输入是否能到达被编辑语句。若 diagnosis 指出某个 guard 排除了边界输入，提示要求修改 guard 或更早的可达控制流，而不是在不可达分支内再嵌套同一条件。完全重复候选仍计入模型请求上限；下一轮会收到 `DUPLICATE RECOVERY REQUIREMENT`，并把重试温度从 0.15 有限提高到 0.25，以尝试离开已证伪答案。所有新候选仍必须通过相同静态门禁和完整验证矩阵。
+
+上下文选择并不等于允许修改。AutoFix 会优先发送构建输出直接引用的文件，并有界追踪这些文件能够保守解析到的本地 Python、JavaScript/TypeScript、C/C++ 依赖；因此测试经 `__init__.py` 重导出调用的实现也能提前。Python 的 `src/包名/...` 布局在模块后缀唯一时可识别，存在歧义则退回普通扫描。测试仍默认只读，外部依赖和项目外路径仍被排除。repair JSON 的 `context_selections` 按尝试记录原因、字符数和截断状态，不保存额外的源码副本，可用于判断失败究竟来自模型能力还是上下文缺失。
 
 | 命令 | 用途 | 是否改源码 |
 | --- | --- | --- |

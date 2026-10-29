@@ -4,6 +4,8 @@
 
 ### Added
 
+- 新增可审计的 `SourceContext` / `ContextSelection`：从构建输出直接路径出发，有界遍历 Python（含包重导出和唯一模块后缀的 `src/` 布局）、JavaScript/TypeScript 与 C/C++ 本地依赖，并记录选择原因、测试属性、字符数和截断状态。
+- repair/evaluation 报告按尝试保存上下文选择元数据；`evaluate-suite` 在请求 Ollama 前显示前六个入选文件及原因，模型提示收到同一相关性说明。
 - 验证失败重试上下文新增 persistent original failures、new failures 与 diagnosis→控制流→diff 一致性审计，要求确认失败输入能够到达被编辑语句。
 - 字节级重复候选触发 `DUPLICATE RECOVERY REQUIREMENT`，明确要求改变编辑坐标或 corrected code；后续一次请求使用受控 0.25 温度尝试离开已证伪答案。
 - `evaluate-suite` 人类模式默认显示实时 case/attempt 进度；等待 Ollama 和验证期间使用动态 spinner，候选到达后显示 diagnosis、文件、行号与验证结果。
@@ -31,10 +33,12 @@
 
 ### Changed
 
+- 上下文排序从“生产文件统一优先”升级为“错误输出直达生产文件→直达文件的本地生产依赖→直达测试→其余有界源码”，以在固定字符预算内减少无关文件竞争。
 - 模型提示新增通用可达性规则：若 guard 排除失败输入，应修改 guard 或更早控制流；禁止在 predicate 已由外层分支保证时添加等价内层条件。
 
 ### Safety
 
+- 上下文枚举使用可剪枝目录遍历，不进入依赖、缓存、构建产物或符号链接目录；import 图只在已枚举项目源码内解析并设节点上限，歧义模块不猜测。
 - 脏 Git 仓库和尚无 commit 的仓库在构建、Ollama 请求和源码修改前停止；AutoFix 不自动 stash、clean、commit、push 或 merge，只有显式 `--commit` 才能在验证后创建本地提交。
 - worktree 在成功、验证失败、模型异常和 `KeyboardInterrupt` 后定向移除；清理失败不会自动全局 prune，以免影响用户的其他 worktree。
 - 非 Git 项目继续使用临时副本；验证成功的 `--apply` 仍需通过原文件字节级并发检查才写回目标文件。
@@ -49,7 +53,7 @@
 
 ### Verified
 
-- Windows 本机 228 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、实时进度/终端 diff、语义重试、workflow YAML 和 JSON schema 检查通过。
+- Windows 本机 235 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、实时进度/终端 diff、语义重试、可解释上下文排序、workflow YAML 和 JSON schema 检查通过。
 - 隔离 PEP 517 wheel 构建通过，并确认 `autofix/repository.py`、`autofix/agent/artifacts.py` 与 `autofix/evaluation_suite.py` 已包含在生成包中。
 - 使用 `qwen2.5-coder:7b` 在独立 Git 仓库完成失败复现、detached-worktree 预览、plan v4 重放、指定 patch 输出和显式本地 commit 闭环；最终 commit 只包含目标源码并保留 diff trailer。
 

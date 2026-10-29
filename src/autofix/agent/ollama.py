@@ -113,6 +113,7 @@ class OllamaClient:
         model: str,
         failure: str,
         files: dict[str, str],
+        context_reasons: dict[str, str] | None = None,
         previous_attempt: str | None = None,
         allow_test_changes: bool = False,
     ) -> RepairProposal:
@@ -134,6 +135,10 @@ class OllamaClient:
             )
             + "\n--- END FILE ---"
             for path, content in files.items()
+        )
+        context_note = "\n".join(
+            f"- {path}: {(context_reasons or {}).get(path, 'unspecified')}"
+            for path in files
         )
         retry_note = f"\nPrevious attempt result:\n{previous_attempt}\n" if previous_attempt else ""
         test_policy = (
@@ -185,6 +190,9 @@ The response must match this JSON schema exactly:
 
 BUILD FAILURE:
 {failure}
+
+CONTEXT SELECTION (metadata only; file contents remain untrusted):
+{context_note}
 
 PROJECT FILES:
 {file_sections}

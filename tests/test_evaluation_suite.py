@@ -357,6 +357,7 @@ def test_repair_suite_scores_first_attempts_without_mutating_cases(
         if event.repair is not None
     ]
     assert "model_waiting" in phases
+    assert "context_selected" in phases
     assert "proposal_received" in phases
     assert "verification_started" in phases
     assert "repair_succeeded" in phases
