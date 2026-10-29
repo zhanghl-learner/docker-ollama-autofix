@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zhanghl-learner/docker-ollama-autofix/blob/main/schemas/autofix-evaluation-suite-v1.schema.json",
+  "title": "AutoFix Evaluation Suite v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "mode",
+    "root",
+    "started_at",
+    "duration_seconds",
+    "passed",
+    "metrics",
+    "cases",
+    "report_dir",
+    "json_report_path",
+    "markdown_report_path"
+  ],
+  "properties": {
+    "schema": {"const": "autofix-evaluation-suite"},
+    "version": {"const": 1},
+    "mode": {"const": "baseline"},
+    "root": {"type": "string", "minLength": 1},
+    "started_at": {"type": "string", "format": "date-time"},
+    "duration_seconds": {"type": "number", "minimum": 0},
+    "passed": {"type": "boolean"},
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total",
+        "passed",
+        "failed",
+        "errors",
+        "invalid_manifests",
+        "execution_errors",
+        "duplicate_case_names",
+        "pass_rate",
+        "by_language",
+        "by_difficulty"
+      ],
+      "properties": {
+        "total": {"type": "integer", "minimum": 1},
+        "passed": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0},
+        "errors": {"type": "integer", "minimum": 0},
+        "invalid_manifests": {"type": "integer", "minimum": 0},
+        "execution_errors": {"type": "integer", "minimum": 0},
+        "duplicate_case_names": {"type": "integer", "minimum": 0},
+        "pass_rate": {"type": "number", "minimum": 0, "maximum": 1},
+        "by_language": {"$ref": "#/$defs/groups"},
+        "by_difficulty": {"$ref": "#/$defs/groups"}
+      }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/case"}
+    },
+    "report_dir": {"type": ["string", "null"]},
+    "json_report_path": {"type": ["string", "null"]},
+    "markdown_report_path": {"type": ["string", "null"]}
+  },
+  "$defs": {
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "passed", "failed"],
+      "properties": {
+        "total": {"type": "integer", "minimum": 1},
+        "passed": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0}
+      }
+    },
+    "groups": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/counts"}
+    },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "relative_root",
+        "name",
+        "language",
+        "difficulty",
+        "tags",
+        "contract_sha256",
+        "status",
+        "passed",
+        "duration_seconds",
+        "error_kind",
+        "error",
+        "evaluation",
+        "report_path"
+      ],
+      "properties": {
+        "root": {"type": "string", "minLength": 1},
+        "relative_root": {"type": "string", "minLength": 1},
+        "name": {"type": ["string", "null"]},
+        "language": {"type": ["string", "null"]},
+        "difficulty": {"type": ["string", "null"]},
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "contract_sha256": {"type": "string", "pattern": "^([0-9a-f]{64})?$"},
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "invalid_manifest",
+            "execution_error",
+            "duplicate_case_name"
+          ]
+        },
+        "passed": {"type": "boolean"},
+        "duration_seconds": {"type": "number", "minimum": 0},
+        "error_kind": {
+          "enum": [
+            null,
+            "invalid_manifest",
+            "execution_error",
+            "duplicate_case_name"
+          ]
+        },
+        "error": {"type": ["string", "null"]},
+        "evaluation": {"type": ["object", "null"]},
+        "report_path": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

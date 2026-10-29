@@ -74,6 +74,7 @@ The model proposes edits but never decides acceptance and never writes directly 
 - `repair --apply --commit` and `apply-plan --commit` can create one local commit containing only the verified files. AutoFix rechecks HEAD, repository identity, file bytes, and the exact Git change set, preserves hooks, and never pushes or merges.
 - `autofix history [PATH]` lists timestamped repair audit reports, including rejected proposals, diffs, verification, and rollback outcomes.
 - `autofix evaluate [PATH]` validates an intentionally failing benchmark, including its expected exit code, failing step, and output signature; `--repair` runs Ollama only after that preflight matches, in an isolated copy, and scores changed-file scope against `autofix-eval.yml`.
+- `autofix evaluate-suite [PATH]` recursively discovers evaluation manifests and runs their deterministic baselines as one suite. It retains invalid and failed cases, then writes versioned aggregate JSON, Markdown, and one JSON file per case.
 - `autofix rollback REPORT --project PATH` reverses a recorded repair and first backs up the replaced files.
 - `autofix undo [PATH]` automatically reverses the latest successful repair that has not already been undone.
 - `--docker` runs build verification in a constrained container against a disposable project copy.
@@ -107,6 +108,7 @@ autofix git-status . --require-clean
 autofix run . --dry-run
 autofix run .
 autofix evaluate examples\complex-validation\python-order-service
+autofix evaluate-suite examples\complex-validation
 autofix evaluate examples\complex-validation\python-order-service --repair
 autofix repair . --model qwen3:0.6b
 autofix history .
@@ -251,11 +253,11 @@ AutoFix runs only a known detected command or an explicit command supplied by th
 
 A passing build proves only the configured gate. It does not prove business correctness, security, or production readiness. Use a clean Git worktree, inspect the diff, and run independent checks before committing. Docker restrictions reduce risk but are not a strong sandbox for hostile repositories or build scripts.
 
-Evaluation is deliberately non-mutating. A baseline case passes only when its declared commands reproduce the expected failure signature; an unrelated import, toolchain, or environment failure is invalid. Repair evaluation additionally requires the final build to pass, every required file to be touched, and no file outside `allowed_change_paths` to change. Reports are saved under `.autofix/evaluations/`; use `--no-save` for ephemeral checks.
+Evaluation is deliberately non-mutating. A baseline case passes only when its declared commands reproduce the expected failure signature; an unrelated import, toolchain, or environment failure is invalid. Repair evaluation additionally requires the final build to pass, every required file to be touched, and no file outside `allowed_change_paths` to change. Single-case reports are saved under `.autofix/evaluations/`; suite evidence is atomically published under `.autofix/evaluation-suites/`. Use `--no-save` for ephemeral checks.
 
 ## Roadmap
 
-The v1 evaluation contract is established by the Python and Node.js multi-file boundary-condition fixtures. Git worktree isolation and dirty-worktree protection are now implemented; the next slices bind Git identity and diff hashes into plans/reports, stabilize CI-facing result contracts, and add aggregate benchmarks plus broader Go/Rust/Java/C++ cases. The detailed order and exit criteria are maintained in [docs/ROADMAP_ZH.md](docs/ROADMAP_ZH.md).
+The v1 evaluation contract is established by the Python and Node.js multi-file boundary-condition fixtures. Git worktree isolation, CI result contracts, and baseline suite aggregation are implemented. The next slices add isolated model-repair suite scoring and broader Go/Rust/Java/C++ cases. The detailed order and exit criteria are maintained in [docs/ROADMAP_ZH.md](docs/ROADMAP_ZH.md).
 
 ## License
 

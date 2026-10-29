@@ -325,6 +325,16 @@ autofix evaluate examples\complex-validation\python-order-service `
 
 `evaluate --repair` 不会修改原用例。0.18.0 起，退出码、失败步骤或输出文本与 `expected_failure` 不符时，不会调用模型；这可以阻止 `ModuleNotFoundError` 等环境错误冒充业务故障。最终构建通过但修改了清单范围外的文件，或者没有命中 `required_change_paths`，仍判为失败。详细清单格式、指标和扩展规范见 [复杂项目评测指南](EVALUATION_ZH.md)。
 
+批量确认一组 fixture 的故障基线时运行：
+
+```powershell
+autofix evaluate-suite examples\complex-validation
+```
+
+命令递归查找 `autofix-eval.yml`，跳过 `.git`、`.autofix`、虚拟环境、依赖与构建产物目录。全部清单均会执行；单个清单损坏、名称重复、故障签名不匹配或执行异常不会让其余用例消失。默认报告原子写入 `.autofix\evaluation-suites\<UTC>\`，其中包含 `suite.json`、`suite.md` 和 `cases\*.json`。至少一个用例失败时退出 1；找不到用例或无法创建报告时退出 2。`--json --no-save` 可用于只读取 stdout 的自动化检查。
+
+当前 `evaluate-suite` 是 baseline-only：它验证每个故障契约能否稳定复现，不调用 Ollama，也不表示模型修复成功。批量 `--repair`、首次通过率和模型维度指标属于下一切片。
+
 0.19.0 起，每个模型候选必须包含可审计的 `diagnosis`。候选通过静态校验但构建失败时，AutoFix 保存本轮 diff、构建输出和新增失败测试，然后把工作区恢复到初始故障状态；下一轮从干净源码重新修复，而不是叠加在错误修改上。完全重复的编辑和恢复到已验证失败状态的循环会被拒绝。CLI 的 `verification failures` 表示“能够应用但未通过构建”的候选数量，它与静态 `rejections` 是不同指标。
 
 | 命令 | 用途 | 是否改源码 |
@@ -343,6 +353,7 @@ autofix evaluate examples\complex-validation\python-order-service `
 | `autofix repair . --apply` | 隔离验证成功后写回 | 是 |
 | `autofix apply-plan PLAN --project .` | 应用已审核且 hash 未过期的 plan | 是 |
 | `autofix ci-check . --output ci-result.json` | CI 无交互验证与稳定 JSON/退出码 | 否 |
+| `autofix evaluate-suite PATH` | 批量执行评测故障基线并保存聚合证据 | 否 |
 | `autofix history .` | 查看修复历史 | 否 |
 | `autofix undo .` | 撤销最近一次尚未撤销的成功修复 | 是；先备份当前版本 |
 | `autofix rollback REPORT --project .` | 按指定报告撤销 | 是；先备份当前版本 |
@@ -356,6 +367,7 @@ autofix evaluate examples\complex-validation\python-order-service `
 autofix --help
 autofix repair --help
 autofix apply-plan --help
+autofix evaluate-suite --help
 autofix ci-check --help
 autofix bundle --help
 ```

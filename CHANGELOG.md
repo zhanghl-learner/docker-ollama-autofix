@@ -4,6 +4,9 @@
 
 ### Added
 
+- 新增 baseline-only `autofix evaluate-suite`：递归发现并稳定排序 `autofix-eval.yml`，批量复现故障契约，不调用模型或修改源码。
+- 聚合评测原子发布逐用例 JSON、`suite.json` 与 `suite.md`；`autofix-evaluation-suite` schema v1 固定通过率、错误分类、语言/难度分组、契约摘要和耗时。
+- 无效清单、执行异常、故障签名不匹配和重复用例名都会保留在聚合结果中，不因单个坏用例丢弃整套失败证据。
 - 新增无交互 `autofix ci-check`：stdout 固定输出 `autofix-ci-result` JSON v1，并使用保留退出码区分通过、验证失败、环境错误、策略拒绝、配置错误和内部错误。
 - `ci-check --output` 通过同目录临时文件和原子替换写入与 stdout 相同的 JSON；默认要求干净且已有 HEAD 的 Git 仓库，默认不产生普通 run 报告。
 - 新增学习导读、核心代码导读、动手实验和 CI 契约文档，README 提供统一入口。
@@ -32,8 +35,8 @@
 
 ### Verified
 
-- Windows 本机 209 项 pytest、`compileall`、Python/Node 复杂 fixture 基线和 workflow YAML 检查通过。
-- 隔离 PEP 517 wheel 构建通过，并确认 `autofix/repository.py` 与 `autofix/agent/artifacts.py` 已包含在生成包中。
+- Windows 本机 218 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、workflow YAML 和 JSON schema 检查通过。
+- 隔离 PEP 517 wheel 构建通过，并确认 `autofix/repository.py`、`autofix/agent/artifacts.py` 与 `autofix/evaluation_suite.py` 已包含在生成包中。
 - 使用 `qwen2.5-coder:7b` 在独立 Git 仓库完成失败复现、detached-worktree 预览、plan v4 重放、指定 patch 输出和显式本地 commit 闭环；最终 commit 只包含目标源码并保留 diff trailer。
 
 ### Fixed

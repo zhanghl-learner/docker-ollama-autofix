@@ -44,6 +44,7 @@ from autofix.evaluation import (
     evaluate_project,
     load_evaluation_manifest,
 )
+from autofix.evaluation_suite import EvaluationSuiteError, evaluate_suite
 from autofix.models import BuildStep, ProjectInspection
 from autofix.repository import (
     GitCommitError,
@@ -805,6 +806,60 @@ def evaluate(
             console.print(
                 "[green]Baseline is valid. Re-run with --repair to score an isolated model repair.[/green]"
             )
+    if not result.passed:
+        raise typer.Exit(code=1)
+
+
+@app.command("evaluate-suite")
+def evaluate_suite_command(
+    path: Path = typer.Argument(
+        Path("."), exists=True, file_okay=False, resolve_path=True
+    ),
+    timeout: float = typer.Option(300, min=0.1, help="Timeout per case step."),
+    no_save: bool = typer.Option(
+        False, "--no-save", help="Do not save aggregate or per-case reports."
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print aggregate JSON."),
+) -> None:
+    """Discover and aggregate every baseline evaluation contract below a root."""
+
+    try:
+        result = evaluate_suite(
+            path,
+            timeout_seconds=timeout,
+            save_report=not no_save,
+        )
+    except EvaluationSuiteError as exc:
+        console.print(f"[red]Evaluation suite stopped: {exc}[/red]")
+        raise typer.Exit(code=2) from exc
+    if json_output:
+        _json(result.to_dict())
+    else:
+        table = Table(title=f"AutoFix evaluation suite: {path}")
+        table.add_column("Case")
+        table.add_column("Language")
+        table.add_column("Difficulty")
+        table.add_column("Status")
+        table.add_column("Duration")
+        for case in result.cases:
+            manifest = case.result.manifest if case.result else None
+            table.add_row(
+                case.relative_root,
+                manifest.language if manifest else "unknown",
+                manifest.difficulty if manifest else "unknown",
+                "[green]passed[/green]" if case.passed else f"[red]{case.status}[/red]",
+                f"{case.duration_seconds:.3f}s",
+            )
+        console.print(table)
+        metrics = result.metrics
+        console.print(
+            f"Suite result: {metrics['passed']}/{metrics['total']} passed "
+            f"({metrics['pass_rate']:.2%})"
+        )
+        if result.json_report_path:
+            console.print(f"Suite JSON: {result.json_report_path}")
+        if result.markdown_report_path:
+            console.print(f"Suite Markdown: {result.markdown_report_path}")
     if not result.passed:
         raise typer.Exit(code=1)
 

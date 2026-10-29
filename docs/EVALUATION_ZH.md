@@ -122,10 +122,21 @@ autofix evaluate . --repair --json
 
 当前 Python 和 Node 多文件用例证明了 v1 契约能够区分有效基线、环境漂移、越界修改和真实修复，也记录了 `qwen3:0.6b` 与 `qwen2.5-coder:7b` 的能力差异。但两个复杂用例不能代表任意真实项目，更不能单独支撑生产成功率结论。
 
-下一阶段的评测工作按以下顺序推进：
+第一段聚合能力已经实现：
 
-1. 实现一次运行多个清单的聚合命令，保留每个原始 evaluation JSON；
-2. 固定机器可读结果 schema，汇总通过率、首次通过率、平均尝试数、静态拒绝率、验证失败率、越界修改率和耗时；
+```powershell
+autofix evaluate-suite examples\complex-validation
+autofix evaluate-suite examples\complex-validation --json --no-save
+```
+
+命令按稳定路径顺序递归发现清单，执行所有 baseline 契约，并保留通过、契约不匹配、无效清单、执行异常与重复名称。默认一次性发布 `.autofix/evaluation-suites/<UTC>/suite.json`、`suite.md` 和逐用例 JSON；发布采用同目录暂存后原子重命名，避免中断留下看似完整的半份聚合报告。JSON 遵循 [`autofix-evaluation-suite` v1 schema](../schemas/autofix-evaluation-suite-v1.schema.json)，包含总数、通过/失败数、错误分类、通过率、语言/难度分组、每份契约 SHA-256 与耗时。
+
+这条命令目前只做确定性 baseline，不调用模型。它回答“套件是否仍能稳定复现声明的故障”，不能回答“模型能否修好”。保留这一边界可以先固定发现、错误保留、报告和 schema，再在下一切片加入隔离 repair，避免把基础设施变化误判为模型分数变化。
+
+后续评测工作按以下顺序推进：
+
+1. [x] 实现一次运行多个清单的 baseline 聚合命令，保留每个原始结果并固定 JSON schema v1；
+2. 在套件中加入隔离模型 repair，汇总首次通过率、平均尝试数、静态拒绝率、验证失败率、越界修改率和耗时；
 3. 每个主要生态至少加入基础、跨文件和环境门禁三类用例，并保留模型不能解决的用例；
 4. 增加来自真实开源仓库的最小化、许可兼容故障，同时记录上游来源和简化过程；
 5. 在 CI 中运行不调用真实模型的契约/安全回归；真实模型评测单独运行并记录硬件、模型 digest、工具链和日期；
@@ -145,4 +156,4 @@ autofix evaluate . --repair --json
 | D | Rust | module/trait、Cargo offline、borrow/type errors |
 | E | Python/Node advanced | async、类型检查、锁定依赖、lint/format gate |
 
-聚合排行榜尚未实现。在此之前可收集每个 evaluation JSON，再按 `case.name + contract_sha256 + model` 比较通过率、平均提议数和平均拒绝数。不要只比较“最终是否通过”，越界修改与缺失必改文件同样是失败。具体版本里程碑见[开发路线图](ROADMAP_ZH.md)。
+模型 repair 聚合和排行榜尚未实现。在此之前可收集每个 repair evaluation JSON，再按 `case.name + contract_sha256 + model` 比较通过率、平均提议数和平均拒绝数。不要把 baseline suite 通过率当作模型成功率，也不要只比较“最终是否通过”；越界修改与缺失必改文件同样是失败。具体版本里程碑见[开发路线图](ROADMAP_ZH.md)。

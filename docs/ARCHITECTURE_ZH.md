@@ -46,6 +46,7 @@ flowchart TB
         PLAN[Git/策略绑定 plan v4<br/>agent/plans.py]
         ROLLBACK[撤销与回执<br/>agent/rollback.py]
         EVALUATION[可重复评测<br/>evaluation.py]
+        EVAL_SUITE[批量基线聚合<br/>evaluation_suite.py]
     end
 
     subgraph Intelligence[模型边界]
@@ -68,6 +69,7 @@ flowchart TB
         PATCHES[.autofix/patches]
         BACKUPS[backups 与 rollbacks]
         EVALUATIONS[.autofix/evaluations]
+        EVALUATION_SUITES[.autofix/evaluation-suites]
     end
 
     USER --> CLI
@@ -75,9 +77,12 @@ flowchart TB
     CLI --> CONFIG
     CLI --> DETECT
     CLI --> GIT
+    CLI --> EVAL_SUITE
     CONFIG --> STEPS
     DETECT --> STEPS
     STEPS --> REPAIR
+    EVAL_SUITE --> EVALUATION
+    EVAL_SUITE --> EVALUATION_SUITES
     GIT --> REPAIR
     REPAIR --> WORKTREE
     WORKTREE --> LOCAL
@@ -231,6 +236,26 @@ flowchart LR
 ```
 
 未预期异常映射为 `internal_error / 70`，避免 CI 只能看到不可区分的退出码 1。原始工具退出码仍保存在 `BuildResult`，所以固定契约不会丢失诊断信息。该入口默认不保存 `.autofix/runs`，避免仅为 CI 取证污染 checkout；`--save-run-report` 为显式选择。
+
+### 3.4 批量基线评测
+
+`evaluation_suite.py` 是 `evaluation.py` 之上的聚合层，不复制单用例验收逻辑。它先确定性遍历目录并排除版本控制、审计、依赖缓存和构建产物，再逐个调用 `load_evaluation_manifest()` 与 baseline `evaluate_project(save_report=False)`。因此套件与单用例共享完全相同的故障签名判定，同时不会在遍历过程中生成新清单或递归读取自己的报告。
+
+```mermaid
+flowchart LR
+    ROOT[套件根目录] --> DISCOVER[稳定发现 autofix-eval.yml]
+    DISCOVER --> LOAD{逐个解析清单}
+    LOAD -->|无效| KEEP_ERROR[保留错误用例]
+    LOAD -->|有效| BASELINE[evaluate_project baseline]
+    BASELINE --> RESULT[保留完整 EvaluationResult]
+    KEEP_ERROR --> DUP[全局名称唯一性检查]
+    RESULT --> DUP
+    DUP --> AGG[聚合计数、分组、耗时]
+    AGG --> STAGE[同目录临时目录]
+    STAGE --> PUBLISH[原子发布 suite.json / suite.md / cases]
+```
+
+单个用例的解析或执行失败只改变该用例状态，不中断其余用例；重复 `case.name` 会把所有冲突项标记为失败。只有根目录无清单或聚合报告无法发布才属于套件级错误。`autofix-evaluation-suite` v1 固定为 `mode=baseline`，刻意不包含模型字段：下一切片会在不改变现有 baseline 含义的前提下扩展隔离 repair 聚合。
 
 ## 4. 配置系统
 

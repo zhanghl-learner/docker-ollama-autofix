@@ -70,8 +70,9 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 
 计划能力：
 
-- `autofix evaluate-suite`（名称可在实现前确认）发现并批量执行清单；
-- 输出逐用例 JSON 和聚合 JSON/Markdown；
+- [x] `autofix evaluate-suite` 以稳定顺序发现并批量执行 baseline 清单；
+- [x] baseline 模式输出逐用例 JSON 和聚合 JSON/Markdown，并固定 schema v1；
+- 隔离执行批量模型 repair，并在相同契约上比较结果；
 - 指标至少包含通过率、首次通过率、平均尝试数、静态拒绝率、验证失败率、越界修改率和耗时；
 - Go、Rust、Java、C++ 分别增加跨文件业务故障和环境门禁；
 - Python/Node 增加类型、异步、lint/format 或锁定依赖场景；
@@ -174,6 +175,8 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 同日使用 `qwen2.5-coder:7b` 完成独立 Git 项目的真实闭环。首次重放暴露主工作区 LF 与 detached worktree CRLF 导致的 diff digest 漂移；安全门禁在写入前停止。修复换行归一化并加入强制 `core.autocrlf=true` 回归后，重新生成的 plan v4 成功应用，指定 patch 通过反向检查，本地 commit 仅修改一个目标源码文件且包含 `AutoFix-Diff-SHA256` trailer。
 
 第五切片于 2026-10-29 完成首轮本机验证：新增 `ci-check` JSON envelope v1、六类保留退出码、严格 Git/clean 默认策略、原子结果文件和仓库内 JSON Schema；209 项测试覆盖通过、普通验证失败、缺工具环境错误、脏/非 Git 仓库拒绝、配置错误、显式非 Git 运行、内部异常及 stdout/文件一致性。GitHub Actions 已切换为通过该契约执行 pytest 并上传 JSON/JUnit，推送后的 Windows/Linux 结果仍需独立确认。
+
+第六切片于 2026-10-29 进入 v0.21：新增 baseline-only `evaluate-suite`，确定性发现多级清单、跳过生成目录、完整保留失败/无效/执行异常/重复名称，并原子发布逐用例 JSON、聚合 JSON 与 Markdown。`autofix-evaluation-suite` v1 固定总数、错误分类、通过率、语言/难度分组、契约摘要和耗时。模型 repair 聚合仍明确属于下一切片，baseline 通过率不得表述为模型成功率。
 
 ## 8. 文档维护规则
 
