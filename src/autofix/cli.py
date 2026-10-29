@@ -815,21 +815,76 @@ def evaluate_suite_command(
     path: Path = typer.Argument(
         Path("."), exists=True, file_okay=False, resolve_path=True
     ),
+    repair_mode: bool = typer.Option(
+        False,
+        "--repair",
+        help="Run isolated model repair for every valid baseline contract.",
+    ),
+    model: str | None = typer.Option(
+        None, help="Installed Ollama model; defaults to user/project configuration."
+    ),
+    ollama_url: str = typer.Option(
+        "http://127.0.0.1:11434", help="Ollama API base URL."
+    ),
+    max_attempts: int = typer.Option(3, min=1, max=20),
     timeout: float = typer.Option(300, min=0.1, help="Timeout per case step."),
     no_save: bool = typer.Option(
         False, "--no-save", help="Do not save aggregate or per-case reports."
     ),
     json_output: bool = typer.Option(False, "--json", help="Print aggregate JSON."),
+    docker: bool = typer.Option(False, "--docker", help="Run verification in Docker."),
+    docker_image: str | None = typer.Option(
+        None, help="Image shared by every suite case; required if not configured."
+    ),
+    docker_cpus: float = typer.Option(2.0, min=0.1, max=64),
+    docker_memory: str = typer.Option("2g"),
+    docker_pids: int = typer.Option(256, min=16, max=4096),
 ) -> None:
-    """Discover and aggregate every baseline evaluation contract below a root."""
+    """Aggregate baseline contracts or isolated model repairs below a root."""
 
     try:
+        config = _load_config_or_exit(path) if repair_mode or docker else None
+        build_runner = run_build
+        if docker:
+            docker_config = _docker_config(
+                None,
+                docker_image or (config.docker_image if config else None),
+                docker_cpus,
+                docker_memory,
+                docker_pids,
+                False,
+            )
+            _require_docker()
+
+            def build_runner(  # type: ignore[no-redef]
+                root: Path,
+                steps: tuple[BuildStep, ...],
+                *,
+                timeout_seconds: float,
+                save_report: bool = True,
+            ):
+                """Bind one explicit Docker policy to every suite case."""
+
+                return run_build_docker(
+                    root,
+                    steps,
+                    config=docker_config,
+                    timeout_seconds=timeout_seconds,
+                    save_report=save_report,
+                )
+
+        selected_model = model or (config.ollama_model if config else None)
         result = evaluate_suite(
             path,
             timeout_seconds=timeout,
             save_report=not no_save,
+            client=OllamaClient(ollama_url) if repair_mode else None,
+            model=selected_model,
+            max_attempts=max_attempts,
+            build_runner=build_runner,
+            runner_name="docker" if docker else "local",
         )
-    except EvaluationSuiteError as exc:
+    except (DockerConfigurationError, EvaluationSuiteError) as exc:
         console.print(f"[red]Evaluation suite stopped: {exc}[/red]")
         raise typer.Exit(code=2) from exc
     if json_output:
@@ -840,15 +895,27 @@ def evaluate_suite_command(
         table.add_column("Language")
         table.add_column("Difficulty")
         table.add_column("Status")
+        table.add_column("Attempts")
         table.add_column("Duration")
+        table.add_column("Error")
         for case in result.cases:
             manifest = case.result.manifest if case.result else None
+            attempts = (
+                case.result.to_dict()["metrics"]["proposal_count"]
+                if case.result and result.mode == "repair"
+                else "-"
+            )
+            error = case.error or (
+                case.result.repair_error if case.result else None
+            )
             table.add_row(
                 case.relative_root,
                 manifest.language if manifest else "unknown",
                 manifest.difficulty if manifest else "unknown",
                 "[green]passed[/green]" if case.passed else f"[red]{case.status}[/red]",
+                str(attempts),
                 f"{case.duration_seconds:.3f}s",
+                error or "",
             )
         console.print(table)
         metrics = result.metrics
@@ -856,6 +923,14 @@ def evaluate_suite_command(
             f"Suite result: {metrics['passed']}/{metrics['total']} passed "
             f"({metrics['pass_rate']:.2%})"
         )
+        if result.mode == "repair":
+            console.print(
+                f"Repair metrics: first-attempt pass "
+                f"{metrics['first_attempt_pass_rate']:.2%}, "
+                f"average attempts {metrics['average_attempts']:.3f}, "
+                f"static rejection {metrics['static_rejection_rate']:.2%}, "
+                f"verification failure {metrics['verification_failure_rate']:.2%}"
+            )
         if result.json_report_path:
             console.print(f"Suite JSON: {result.json_report_path}")
         if result.markdown_report_path:

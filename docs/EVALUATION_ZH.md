@@ -131,12 +131,37 @@ autofix evaluate-suite examples\complex-validation --json --no-save
 
 命令按稳定路径顺序递归发现清单，执行所有 baseline 契约，并保留通过、契约不匹配、无效清单、执行异常与重复名称。默认一次性发布 `.autofix/evaluation-suites/<UTC>/suite.json`、`suite.md` 和逐用例 JSON；发布采用同目录暂存后原子重命名，避免中断留下看似完整的半份聚合报告。JSON 遵循 [`autofix-evaluation-suite` v1 schema](../schemas/autofix-evaluation-suite-v1.schema.json)，包含总数、通过/失败数、错误分类、通过率、语言/难度分组、每份契约 SHA-256 与耗时。
 
-这条命令目前只做确定性 baseline，不调用模型。它回答“套件是否仍能稳定复现声明的故障”，不能回答“模型能否修好”。保留这一边界可以先固定发现、错误保留、报告和 schema，再在下一切片加入隔离 repair，避免把基础设施变化误判为模型分数变化。
+默认命令只做确定性 baseline，不调用模型。它回答“套件是否仍能稳定复现声明的故障”，不能回答“模型能否修好”。baseline 报告继续遵循 v1，保证第一段聚合结果的含义不变。
+
+第二段已经加入隔离 repair 聚合：
+
+```powershell
+autofix evaluate-suite examples\complex-validation `
+  --repair `
+  --model qwen2.5-coder:7b `
+  --max-attempts 3
+```
+
+每个清单先独立匹配 `expected_failure`，不匹配时该用例的模型调用数保持为 0。匹配后复用单用例的 detached Git worktree/临时副本、路径策略、精确旧文本、破坏性检查与完整验证矩阵；无论成功或失败都不写回 fixture。repair 聚合遵循 [`autofix-evaluation-suite` v2 schema](../schemas/autofix-evaluation-suite-v2.schema.json)，增加 `autofix_version`、`model`、`runner`、`max_attempts` 和以下指标：
+
+| 指标 | 含义 |
+| --- | --- |
+| `repair_eligible` | 初始故障签名匹配、具备修复资格的有效用例数 |
+| `repair_attempted` | 至少得到一个模型 proposal 的用例数 |
+| `model_not_attempted` | 有效 repair 结果中 proposal 数为 0 的用例，包括 preflight/环境门禁 |
+| `first_attempt_pass_rate` | 首个 proposal 无静态拒绝、无验证失败并最终通过的用例数 / attempted |
+| `average_attempts` | proposal 总数 / attempted；不是成功用例专属平均数 |
+| `static_rejection_rate` | 静态拒绝数 / proposal 总数 |
+| `verification_failure_rate` | 可应用但构建失败的候选数 / proposal 总数 |
+| `unexpected_change_rate` | 出现越界修改的用例数 / attempted |
+| `missing_required_change_rate` | 未触及必改文件的用例数 / attempted |
+
+分母为 0 时比例固定为 `0.0`，同时保留原始计数，使用者不能把 0% 误读为已经发生过成功评测。模型连接/协议失败、环境门禁和无安全候选仍作为失败用例保留；`--no-save` 只禁止落盘，不会清空静态拒绝与验证失败的内存统计。
 
 后续评测工作按以下顺序推进：
 
 1. [x] 实现一次运行多个清单的 baseline 聚合命令，保留每个原始结果并固定 JSON schema v1；
-2. 在套件中加入隔离模型 repair，汇总首次通过率、平均尝试数、静态拒绝率、验证失败率、越界修改率和耗时；
+2. [x] 在套件中加入隔离模型 repair，汇总首次通过率、平均尝试数、静态拒绝率、验证失败率、越界修改率和耗时；
 3. 每个主要生态至少加入基础、跨文件和环境门禁三类用例，并保留模型不能解决的用例；
 4. 增加来自真实开源仓库的最小化、许可兼容故障，同时记录上游来源和简化过程；
 5. 在 CI 中运行不调用真实模型的契约/安全回归；真实模型评测单独运行并记录硬件、模型 digest、工具链和日期；
@@ -156,4 +181,4 @@ autofix evaluate-suite examples\complex-validation --json --no-save
 | D | Rust | module/trait、Cargo offline、borrow/type errors |
 | E | Python/Node advanced | async、类型检查、锁定依赖、lint/format gate |
 
-模型 repair 聚合和排行榜尚未实现。在此之前可收集每个 repair evaluation JSON，再按 `case.name + contract_sha256 + model` 比较通过率、平均提议数和平均拒绝数。不要把 baseline suite 通过率当作模型成功率，也不要只比较“最终是否通过”；越界修改与缺失必改文件同样是失败。具体版本里程碑见[开发路线图](ROADMAP_ZH.md)。
+模型 repair 聚合已经实现，跨版本排行榜和模型 digest 尚未实现。比较结果时必须同时使用 `case.name + contract_sha256 + model + runner`，不要把 baseline suite 通过率当作模型成功率，也不要只比较“最终是否通过”；越界修改与缺失必改文件同样是失败。具体版本里程碑见[开发路线图](ROADMAP_ZH.md)。

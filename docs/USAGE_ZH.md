@@ -333,7 +333,16 @@ autofix evaluate-suite examples\complex-validation
 
 命令递归查找 `autofix-eval.yml`，跳过 `.git`、`.autofix`、虚拟环境、依赖与构建产物目录。全部清单均会执行；单个清单损坏、名称重复、故障签名不匹配或执行异常不会让其余用例消失。默认报告原子写入 `.autofix\evaluation-suites\<UTC>\`，其中包含 `suite.json`、`suite.md` 和 `cases\*.json`。至少一个用例失败时退出 1；找不到用例或无法创建报告时退出 2。`--json --no-save` 可用于只读取 stdout 的自动化检查。
 
-当前 `evaluate-suite` 是 baseline-only：它验证每个故障契约能否稳定复现，不调用 Ollama，也不表示模型修复成功。批量 `--repair`、首次通过率和模型维度指标属于下一切片。
+默认模式只验证每个故障契约能否稳定复现，不调用 Ollama，也不表示模型修复成功。批量模型评测使用：
+
+```powershell
+autofix evaluate-suite examples\complex-validation `
+  --repair `
+  --model qwen2.5-coder:7b `
+  --max-attempts 3
+```
+
+每个有效用例仍通过 `evaluate_project()` 单独进行故障签名 preflight，并在 detached Git worktree 或非 Git 临时副本中修复；原 fixture 不写回。repair 聚合使用 JSON v2，记录模型、runner、尝试上限、首次通过率、平均尝试数、静态拒绝率、验证失败率、越界修改率和缺失必改文件率。baseline 继续使用兼容的 JSON v1。`--docker` 模式要求所有用例共享一个明确的 `--docker-image` 或套件级配置镜像；当前不会为混合语言用例自动切换多个镜像。
 
 0.19.0 起，每个模型候选必须包含可审计的 `diagnosis`。候选通过静态校验但构建失败时，AutoFix 保存本轮 diff、构建输出和新增失败测试，然后把工作区恢复到初始故障状态；下一轮从干净源码重新修复，而不是叠加在错误修改上。完全重复的编辑和恢复到已验证失败状态的循环会被拒绝。CLI 的 `verification failures` 表示“能够应用但未通过构建”的候选数量，它与静态 `rejections` 是不同指标。
 
@@ -354,6 +363,7 @@ autofix evaluate-suite examples\complex-validation
 | `autofix apply-plan PLAN --project .` | 应用已审核且 hash 未过期的 plan | 是 |
 | `autofix ci-check . --output ci-result.json` | CI 无交互验证与稳定 JSON/退出码 | 否 |
 | `autofix evaluate-suite PATH` | 批量执行评测故障基线并保存聚合证据 | 否 |
+| `autofix evaluate-suite PATH --repair --model MODEL` | 隔离执行批量模型修复并聚合计分 | 否 |
 | `autofix history .` | 查看修复历史 | 否 |
 | `autofix undo .` | 撤销最近一次尚未撤销的成功修复 | 是；先备份当前版本 |
 | `autofix rollback REPORT --project .` | 按指定报告撤销 | 是；先备份当前版本 |

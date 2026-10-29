@@ -461,6 +461,9 @@ def repair_project(
             )
         error = RepairEnvironmentError(environment_issue)
         setattr(error, "report_path", result.report_path)
+        # Keep structured evidence available to callers that intentionally
+        # disable filesystem reports, such as aggregate benchmark runs.
+        setattr(error, "repair_result", result)
         cleanup_after_error(error)
         raise error
 
@@ -704,6 +707,7 @@ def repair_project(
         )
         report = finish(applied=False, rolled_back=False, error=str(error))
         setattr(error, "report_path", report.report_path)
+        setattr(error, "repair_result", report)
         cleanup()
         raise error
 

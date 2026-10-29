@@ -463,6 +463,13 @@ def evaluate_project(
             proposal_count = 0
             rejection_count = 0
             verification_failure_count = 0
+            repair_result = getattr(exc, "repair_result", None)
+            if isinstance(repair_result, RepairResult):
+                proposal_count = len(repair_result.proposals)
+                rejection_count = len(repair_result.rejections)
+                verification_failure_count = len(
+                    repair_result.verification_failures
+                )
             if repair_report_path:
                 try:
                     repair_data = json.loads(

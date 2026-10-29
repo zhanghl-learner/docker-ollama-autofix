@@ -11,8 +11,11 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
-from typing import Any
+from typing import Any, Callable
 
+from autofix import __version__
+from autofix.agent.repair import RepairClient
+from autofix.builders import BuildResult, run_build
 from autofix.evaluation import (
     EvaluationError,
     EvaluationResult,
@@ -22,7 +25,8 @@ from autofix.evaluation import (
 
 
 SUITE_SCHEMA = "autofix-evaluation-suite"
-SUITE_VERSION = 1
+BASELINE_SUITE_VERSION = 1
+REPAIR_SUITE_VERSION = 2
 _IGNORED_DIRECTORIES = {
     ".autofix",
     ".git",
@@ -92,12 +96,17 @@ class EvaluationSuiteCase:
 
 @dataclass(frozen=True)
 class EvaluationSuiteResult:
-    """Aggregate result for every discovered baseline contract."""
+    """Aggregate result for every discovered baseline or repair contract."""
 
     root: Path
     cases: tuple[EvaluationSuiteCase, ...]
     started_at: str
     duration_seconds: float
+    mode: str = "baseline"
+    model: str | None = None
+    runner: str = "local"
+    max_attempts: int | None = None
+    autofix_version: str = __version__
     report_dir: Path | None = None
     json_report_path: Path | None = None
     markdown_report_path: Path | None = None
@@ -110,7 +119,7 @@ class EvaluationSuiteResult:
 
     @property
     def metrics(self) -> dict[str, Any]:
-        """Return stable baseline counts and grouping summaries."""
+        """Return stable common counts plus repair metrics when applicable."""
 
         languages: dict[str, dict[str, int]] = {}
         difficulties: dict[str, dict[str, int]] = {}
@@ -123,7 +132,7 @@ class EvaluationSuiteResult:
                 bucket["passed" if case.passed else "failed"] += 1
         passed = sum(case.passed for case in self.cases)
         total = len(self.cases)
-        return {
+        metrics: dict[str, Any] = {
             "total": total,
             "passed": passed,
             "failed": total - passed,
@@ -141,14 +150,77 @@ class EvaluationSuiteResult:
             "by_language": languages,
             "by_difficulty": difficulties,
         }
+        if self.mode == "repair":
+            repair_results = [
+                case.result
+                for case in self.cases
+                if case.result is not None and case.result.mode == "repair"
+            ]
+            proposal_counts = [
+                _evaluation_count(result, "proposals") for result in repair_results
+            ]
+            attempted = sum(count > 0 for count in proposal_counts)
+            eligible = sum(
+                result.failure_contract_matched for result in repair_results
+            )
+            proposals = sum(proposal_counts)
+            rejections = sum(
+                _evaluation_count(result, "rejections") for result in repair_results
+            )
+            verification_failures = sum(
+                _evaluation_count(result, "verification_failures")
+                for result in repair_results
+            )
+            first_attempt_passed = sum(
+                case.passed
+                and case.result is not None
+                and _evaluation_count(case.result, "proposals") == 1
+                and _evaluation_count(case.result, "rejections") == 0
+                and _evaluation_count(case.result, "verification_failures") == 0
+                for case in self.cases
+            )
+            unexpected = sum(
+                bool(result.unexpected_change_paths) for result in repair_results
+            )
+            missing_required = sum(
+                bool(result.missing_required_paths) for result in repair_results
+            )
+            metrics.update(
+                {
+                    "repair_eligible": eligible,
+                    "repair_attempted": attempted,
+                    "model_not_attempted": len(repair_results) - attempted,
+                    "first_attempt_passed": first_attempt_passed,
+                    "first_attempt_pass_rate": _rate(first_attempt_passed, attempted),
+                    "total_proposals": proposals,
+                    "average_attempts": round(proposals / attempted, 6)
+                    if attempted
+                    else 0.0,
+                    "static_rejections": rejections,
+                    "static_rejection_rate": _rate(rejections, proposals),
+                    "verification_failures": verification_failures,
+                    "verification_failure_rate": _rate(
+                        verification_failures, proposals
+                    ),
+                    "unexpected_change_cases": unexpected,
+                    "unexpected_change_rate": _rate(unexpected, attempted),
+                    "missing_required_change_cases": missing_required,
+                    "missing_required_change_rate": _rate(
+                        missing_required, attempted
+                    ),
+                }
+            )
+        return metrics
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the versioned aggregate and every original case result."""
 
-        return {
+        payload = {
             "schema": SUITE_SCHEMA,
-            "version": SUITE_VERSION,
-            "mode": "baseline",
+            "version": (
+                REPAIR_SUITE_VERSION if self.mode == "repair" else BASELINE_SUITE_VERSION
+            ),
+            "mode": self.mode,
             "root": str(self.root),
             "started_at": self.started_at,
             "duration_seconds": self.duration_seconds,
@@ -163,6 +235,38 @@ class EvaluationSuiteResult:
                 str(self.markdown_report_path) if self.markdown_report_path else None
             ),
         }
+        if self.mode == "repair":
+            payload.update(
+                {
+                    "model": self.model,
+                    "runner": self.runner,
+                    "max_attempts": self.max_attempts,
+                    "autofix_version": self.autofix_version,
+                }
+            )
+        return payload
+
+
+def _evaluation_count(result: EvaluationResult, kind: str) -> int:
+    """Read attempt counts uniformly from successful and rejected repairs."""
+
+    if kind == "proposals":
+        return len(result.repair.proposals) if result.repair else result.proposal_count
+    if kind == "rejections":
+        return len(result.repair.rejections) if result.repair else result.rejection_count
+    if kind == "verification_failures":
+        return (
+            len(result.repair.verification_failures)
+            if result.repair
+            else result.verification_failure_count
+        )
+    raise ValueError(f"Unknown evaluation count: {kind}")
+
+
+def _rate(numerator: int, denominator: int) -> float:
+    """Return a stable zero-safe ratio for machine-readable metrics."""
+
+    return round(numerator / denominator, 6) if denominator else 0.0
 
 
 def discover_evaluation_cases(root: Path | str) -> tuple[Path, ...]:
@@ -202,18 +306,38 @@ def _markdown(result: EvaluationSuiteResult) -> str:
     lines = [
         "# AutoFix evaluation suite",
         "",
-        f"- Mode: `baseline`",
+        f"- Mode: `{result.mode}`",
         f"- Root: `{result.root}`",
         f"- Passed: **{metrics['passed']} / {metrics['total']}**",
         f"- Pass rate: **{metrics['pass_rate']:.2%}**",
         f"- Duration: **{result.duration_seconds:.3f}s**",
-        "",
-        "| Case | Language | Difficulty | Status | Duration | Error |",
-        "| --- | --- | --- | --- | ---: | --- |",
     ]
+    if result.mode == "repair":
+        lines.extend(
+            [
+                f"- Model: `{result.model}`",
+                f"- Runner: `{result.runner}`",
+                f"- Maximum attempts per case: **{result.max_attempts}**",
+                f"- First-attempt pass rate: **{metrics['first_attempt_pass_rate']:.2%}**",
+                f"- Average attempts: **{metrics['average_attempts']:.3f}**",
+                f"- Static rejection rate: **{metrics['static_rejection_rate']:.2%}**",
+                f"- Verification failure rate: **{metrics['verification_failure_rate']:.2%}**",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "| Case | Language | Difficulty | Status | Attempts | Duration | Error |",
+            "| --- | --- | --- | --- | ---: | ---: | --- |",
+        ]
+    )
     for case in result.cases:
         manifest = case.result.manifest if case.result else None
-        error = (case.error or "").replace("|", "\\|").replace("\n", " ")
+        error = (
+            case.error
+            or (case.result.repair_error if case.result else None)
+            or ""
+        ).replace("|", "\\|").replace("\n", " ")
         lines.append(
             "| "
             + " | ".join(
@@ -222,6 +346,9 @@ def _markdown(result: EvaluationSuiteResult) -> str:
                     manifest.language if manifest else "unknown",
                     manifest.difficulty if manifest else "unknown",
                     case.status,
+                    str(_evaluation_count(case.result, "proposals"))
+                    if case.result and result.mode == "repair"
+                    else "-",
                     f"{case.duration_seconds:.3f}s",
                     error,
                 )
@@ -275,10 +402,25 @@ def evaluate_suite(
     *,
     timeout_seconds: float = 300,
     save_report: bool = True,
+    client: RepairClient | None = None,
+    model: str | None = None,
+    max_attempts: int = 3,
+    build_runner: Callable[..., BuildResult] = run_build,
+    runner_name: str = "local",
 ) -> EvaluationSuiteResult:
-    """Run every discovered baseline contract and retain all observed outcomes."""
+    """Run every contract in baseline or isolated repair mode and retain outcomes."""
 
     suite_root = Path(root).expanduser().resolve()
+    mode = "repair" if client is not None else "baseline"
+    selected_model = model.strip() if isinstance(model, str) else None
+    if not 1 <= max_attempts <= 20:
+        raise EvaluationSuiteError("max_attempts must be between 1 and 20")
+    if timeout_seconds <= 0:
+        raise EvaluationSuiteError("timeout_seconds must be greater than zero")
+    if runner_name not in {"local", "docker"}:
+        raise EvaluationSuiteError("runner_name must be 'local' or 'docker'")
+    if mode == "repair" and not selected_model:
+        raise EvaluationSuiteError("A model is required for repair evaluation")
     case_roots = discover_evaluation_cases(suite_root)
     if not case_roots:
         raise EvaluationSuiteError(
@@ -323,7 +465,12 @@ def evaluate_suite(
             evaluation = evaluate_project(
                 case_root,
                 manifest,
+                client=client,
+                model=selected_model,
+                max_attempts=max_attempts,
                 timeout_seconds=timeout_seconds,
+                build_runner=build_runner,
+                runner_name=runner_name,
                 save_report=False,
             )
             case = EvaluationSuiteCase(
@@ -357,10 +504,14 @@ def evaluate_suite(
                     error=f"Duplicate case name {name!r}: {locations}",
                 )
     result = EvaluationSuiteResult(
-        suite_root,
-        tuple(cases),
-        started_at,
-        round(monotonic() - began, 3),
+        root=suite_root,
+        cases=tuple(cases),
+        started_at=started_at,
+        duration_seconds=round(monotonic() - began, 3),
+        mode=mode,
+        model=selected_model,
+        runner=runner_name,
+        max_attempts=max_attempts if mode == "repair" else None,
     )
     if save_report:
         try:

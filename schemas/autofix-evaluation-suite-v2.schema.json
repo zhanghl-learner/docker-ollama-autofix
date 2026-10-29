@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zhanghl-learner/docker-ollama-autofix/blob/main/schemas/autofix-evaluation-suite-v2.schema.json",
+  "title": "AutoFix Repair Evaluation Suite v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "version", "mode", "root", "started_at", "duration_seconds",
+    "passed", "metrics", "cases", "report_dir", "json_report_path",
+    "markdown_report_path", "model", "runner", "max_attempts", "autofix_version"
+  ],
+  "properties": {
+    "schema": {"const": "autofix-evaluation-suite"},
+    "version": {"const": 2},
+    "mode": {"const": "repair"},
+    "root": {"type": "string", "minLength": 1},
+    "started_at": {"type": "string", "format": "date-time"},
+    "duration_seconds": {"type": "number", "minimum": 0},
+    "passed": {"type": "boolean"},
+    "model": {"type": "string", "minLength": 1},
+    "runner": {"enum": ["local", "docker"]},
+    "max_attempts": {"type": "integer", "minimum": 1, "maximum": 20},
+    "autofix_version": {"type": "string", "minLength": 1},
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total", "passed", "failed", "errors", "invalid_manifests",
+        "execution_errors", "duplicate_case_names", "pass_rate",
+        "by_language", "by_difficulty", "repair_eligible",
+        "repair_attempted", "model_not_attempted", "first_attempt_passed",
+        "first_attempt_pass_rate", "total_proposals", "average_attempts",
+        "static_rejections", "static_rejection_rate", "verification_failures",
+        "verification_failure_rate", "unexpected_change_cases",
+        "unexpected_change_rate", "missing_required_change_cases",
+        "missing_required_change_rate"
+      ],
+      "properties": {
+        "total": {"type": "integer", "minimum": 1},
+        "passed": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0},
+        "errors": {"type": "integer", "minimum": 0},
+        "invalid_manifests": {"type": "integer", "minimum": 0},
+        "execution_errors": {"type": "integer", "minimum": 0},
+        "duplicate_case_names": {"type": "integer", "minimum": 0},
+        "pass_rate": {"$ref": "#/$defs/rate"},
+        "by_language": {"$ref": "#/$defs/groups"},
+        "by_difficulty": {"$ref": "#/$defs/groups"},
+        "repair_eligible": {"type": "integer", "minimum": 0},
+        "repair_attempted": {"type": "integer", "minimum": 0},
+        "model_not_attempted": {"type": "integer", "minimum": 0},
+        "first_attempt_passed": {"type": "integer", "minimum": 0},
+        "first_attempt_pass_rate": {"$ref": "#/$defs/rate"},
+        "total_proposals": {"type": "integer", "minimum": 0},
+        "average_attempts": {"type": "number", "minimum": 0},
+        "static_rejections": {"type": "integer", "minimum": 0},
+        "static_rejection_rate": {"$ref": "#/$defs/rate"},
+        "verification_failures": {"type": "integer", "minimum": 0},
+        "verification_failure_rate": {"$ref": "#/$defs/rate"},
+        "unexpected_change_cases": {"type": "integer", "minimum": 0},
+        "unexpected_change_rate": {"$ref": "#/$defs/rate"},
+        "missing_required_change_cases": {"type": "integer", "minimum": 0},
+        "missing_required_change_rate": {"$ref": "#/$defs/rate"}
+      }
+    },
+    "cases": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/case"}},
+    "report_dir": {"type": ["string", "null"]},
+    "json_report_path": {"type": ["string", "null"]},
+    "markdown_report_path": {"type": ["string", "null"]}
+  },
+  "$defs": {
+    "rate": {"type": "number", "minimum": 0, "maximum": 1},
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "passed", "failed"],
+      "properties": {
+        "total": {"type": "integer", "minimum": 1},
+        "passed": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0}
+      }
+    },
+    "groups": {"type": "object", "additionalProperties": {"$ref": "#/$defs/counts"}},
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root", "relative_root", "name", "language", "difficulty", "tags",
+        "contract_sha256", "status", "passed", "duration_seconds",
+        "error_kind", "error", "evaluation", "report_path"
+      ],
+      "properties": {
+        "root": {"type": "string", "minLength": 1},
+        "relative_root": {"type": "string", "minLength": 1},
+        "name": {"type": ["string", "null"]},
+        "language": {"type": ["string", "null"]},
+        "difficulty": {"type": ["string", "null"]},
+        "tags": {"type": "array", "items": {"type": "string"}},
+        "contract_sha256": {"type": "string", "pattern": "^([0-9a-f]{64})?$"},
+        "status": {"enum": ["passed", "failed", "invalid_manifest", "execution_error", "duplicate_case_name"]},
+        "passed": {"type": "boolean"},
+        "duration_seconds": {"type": "number", "minimum": 0},
+        "error_kind": {"enum": [null, "invalid_manifest", "execution_error", "duplicate_case_name"]},
+        "error": {"type": ["string", "null"]},
+        "evaluation": {"type": ["object", "null"]},
+        "report_path": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

@@ -46,7 +46,7 @@ flowchart TB
         PLAN[Git/策略绑定 plan v4<br/>agent/plans.py]
         ROLLBACK[撤销与回执<br/>agent/rollback.py]
         EVALUATION[可重复评测<br/>evaluation.py]
-        EVAL_SUITE[批量基线聚合<br/>evaluation_suite.py]
+        EVAL_SUITE[批量 baseline / repair 聚合<br/>evaluation_suite.py]
     end
 
     subgraph Intelligence[模型边界]
@@ -237,16 +237,21 @@ flowchart LR
 
 未预期异常映射为 `internal_error / 70`，避免 CI 只能看到不可区分的退出码 1。原始工具退出码仍保存在 `BuildResult`，所以固定契约不会丢失诊断信息。该入口默认不保存 `.autofix/runs`，避免仅为 CI 取证污染 checkout；`--save-run-report` 为显式选择。
 
-### 3.4 批量基线评测
+### 3.4 批量 baseline 与 repair 评测
 
-`evaluation_suite.py` 是 `evaluation.py` 之上的聚合层，不复制单用例验收逻辑。它先确定性遍历目录并排除版本控制、审计、依赖缓存和构建产物，再逐个调用 `load_evaluation_manifest()` 与 baseline `evaluate_project(save_report=False)`。因此套件与单用例共享完全相同的故障签名判定，同时不会在遍历过程中生成新清单或递归读取自己的报告。
+`evaluation_suite.py` 是 `evaluation.py` 之上的聚合层，不复制单用例验收逻辑。它先确定性遍历目录并排除版本控制、审计、依赖缓存和构建产物，再逐个调用 `load_evaluation_manifest()` 与 `evaluate_project(save_report=False)`。因此套件与单用例共享完全相同的故障签名、隔离修复和范围判定，同时不会在遍历过程中生成新清单或递归读取自己的报告。
 
 ```mermaid
 flowchart LR
     ROOT[套件根目录] --> DISCOVER[稳定发现 autofix-eval.yml]
     DISCOVER --> LOAD{逐个解析清单}
     LOAD -->|无效| KEEP_ERROR[保留错误用例]
-    LOAD -->|有效| BASELINE[evaluate_project baseline]
+    LOAD -->|有效| MODE{baseline 或 repair}
+    MODE -->|baseline| BASELINE[复现故障签名]
+    MODE -->|repair| PREFLIGHT[故障签名 preflight]
+    PREFLIGHT -->|匹配| ISOLATE[worktree / 临时副本修复]
+    PREFLIGHT -->|不匹配| RESULT[保留零 proposal 失败]
+    ISOLATE --> RESULT[保留 proposal / 拒绝 / 验证证据]
     BASELINE --> RESULT[保留完整 EvaluationResult]
     KEEP_ERROR --> DUP[全局名称唯一性检查]
     RESULT --> DUP
@@ -255,7 +260,7 @@ flowchart LR
     STAGE --> PUBLISH[原子发布 suite.json / suite.md / cases]
 ```
 
-单个用例的解析或执行失败只改变该用例状态，不中断其余用例；重复 `case.name` 会把所有冲突项标记为失败。只有根目录无清单或聚合报告无法发布才属于套件级错误。`autofix-evaluation-suite` v1 固定为 `mode=baseline`，刻意不包含模型字段：下一切片会在不改变现有 baseline 含义的前提下扩展隔离 repair 聚合。
+单个用例的解析或执行失败只改变该用例状态，不中断其余用例；重复 `case.name` 会把所有冲突项标记为失败。只有根目录无清单、repair 缺少模型或聚合报告无法发布才属于套件级错误。`autofix-evaluation-suite` v1 固定为 `mode=baseline`；v2 固定为 `mode=repair` 并记录 AutoFix 版本、模型、runner、尝试上限和候选质量指标。失败异常携带内存态 `RepairResult`，因此 `--no-save` 不依赖读取临时 repair JSON 也能聚合拒绝和验证失败。
 
 ## 4. 配置系统
 

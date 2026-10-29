@@ -74,7 +74,7 @@ The model proposes edits but never decides acceptance and never writes directly 
 - `repair --apply --commit` and `apply-plan --commit` can create one local commit containing only the verified files. AutoFix rechecks HEAD, repository identity, file bytes, and the exact Git change set, preserves hooks, and never pushes or merges.
 - `autofix history [PATH]` lists timestamped repair audit reports, including rejected proposals, diffs, verification, and rollback outcomes.
 - `autofix evaluate [PATH]` validates an intentionally failing benchmark, including its expected exit code, failing step, and output signature; `--repair` runs Ollama only after that preflight matches, in an isolated copy, and scores changed-file scope against `autofix-eval.yml`.
-- `autofix evaluate-suite [PATH]` recursively discovers evaluation manifests and runs their deterministic baselines as one suite. It retains invalid and failed cases, then writes versioned aggregate JSON, Markdown, and one JSON file per case.
+- `autofix evaluate-suite [PATH]` recursively discovers evaluation manifests and runs deterministic baselines as one suite; add `--repair --model MODEL` to score isolated model repairs. It retains invalid and failed cases, then writes versioned aggregate JSON, Markdown, and one JSON file per case.
 - `autofix rollback REPORT --project PATH` reverses a recorded repair and first backs up the replaced files.
 - `autofix undo [PATH]` automatically reverses the latest successful repair that has not already been undone.
 - `--docker` runs build verification in a constrained container against a disposable project copy.
@@ -109,6 +109,7 @@ autofix run . --dry-run
 autofix run .
 autofix evaluate examples\complex-validation\python-order-service
 autofix evaluate-suite examples\complex-validation
+autofix evaluate-suite examples\complex-validation --repair --model qwen2.5-coder:7b
 autofix evaluate examples\complex-validation\python-order-service --repair
 autofix repair . --model qwen3:0.6b
 autofix history .
@@ -257,7 +258,7 @@ Evaluation is deliberately non-mutating. A baseline case passes only when its de
 
 ## Roadmap
 
-The v1 evaluation contract is established by the Python and Node.js multi-file boundary-condition fixtures. Git worktree isolation, CI result contracts, and baseline suite aggregation are implemented. The next slices add isolated model-repair suite scoring and broader Go/Rust/Java/C++ cases. The detailed order and exit criteria are maintained in [docs/ROADMAP_ZH.md](docs/ROADMAP_ZH.md).
+The v1 evaluation contract is established by the Python and Node.js multi-file boundary-condition fixtures. Git worktree isolation, CI result contracts, baseline suite aggregation, and isolated model-repair suite scoring are implemented. The next slices add model identity metadata and broader Go/Rust/Java/C++ cases. The detailed order and exit criteria are maintained in [docs/ROADMAP_ZH.md](docs/ROADMAP_ZH.md).
 
 ## License
 
