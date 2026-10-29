@@ -1107,6 +1107,15 @@ def evaluate_suite_command(
                 f"static rejection {metrics['static_rejection_rate']:.2%}, "
                 f"verification failure {metrics['verification_failure_rate']:.2%}"
             )
+            console.print(
+                "Context metrics: required-path recall "
+                f"{metrics['required_context_recall']:.2%}, "
+                f"top-5 {metrics['required_context_top5_recall']:.2%}, "
+                f"average rank {metrics['average_required_context_rank']:.3f}, "
+                f"sent {metrics['context_files_sent']} files / "
+                f"{metrics['context_chars_sent']} characters, "
+                f"fallback {metrics['context_fallback_rate']:.2%}"
+            )
             _print_verified_suite_changes(result)
         if result.json_report_path:
             console.print(f"Suite JSON: {result.json_report_path}")

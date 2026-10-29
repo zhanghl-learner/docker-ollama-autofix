@@ -26,7 +26,7 @@ from autofix.evaluation import (
 
 SUITE_SCHEMA = "autofix-evaluation-suite"
 BASELINE_SUITE_VERSION = 1
-REPAIR_SUITE_VERSION = 2
+REPAIR_SUITE_VERSION = 3
 _IGNORED_DIRECTORIES = {
     ".autofix",
     ".git",
@@ -268,6 +268,7 @@ class EvaluationSuiteResult:
                     "missing_required_change_rate": _rate(
                         missing_required, attempted
                     ),
+                    **_context_quality_metrics(repair_results),
                 }
             )
         return metrics
@@ -335,6 +336,72 @@ def _repair_evidence(result: EvaluationResult) -> RepairResult | None:
     return result.repair or result.repair_evidence
 
 
+def _context_quality_metrics(results: list[EvaluationResult]) -> dict[str, Any]:
+    """Measure bounded context cost and required-path retrieval quality."""
+
+    context_cases = 0
+    context_attempts = 0
+    files_sent = 0
+    chars_sent = 0
+    truncated_files = 0
+    fallback_files = 0
+    required_paths = 0
+    required_hits = 0
+    required_top5_hits = 0
+    required_ranks: list[int] = []
+    for result in results:
+        evidence = _repair_evidence(result)
+        if evidence is None or not evidence.context_selections:
+            continue
+        non_empty_attempts = [items for items in evidence.context_selections if items]
+        if not non_empty_attempts:
+            continue
+        context_cases += 1
+        context_attempts += len(non_empty_attempts)
+        for selections in non_empty_attempts:
+            files_sent += len(selections)
+            chars_sent += sum(item.chars for item in selections)
+            truncated_files += sum(item.truncated for item in selections)
+            fallback_files += sum(
+                item.reason == "project-source-fallback" for item in selections
+            )
+
+        first_attempt = non_empty_attempts[0]
+        ranks = {item.path: rank for rank, item in enumerate(first_attempt, 1)}
+        for required in result.manifest.required_change_paths:
+            required_paths += 1
+            rank = ranks.get(required)
+            if rank is None:
+                continue
+            required_hits += 1
+            required_ranks.append(rank)
+            if rank <= 5:
+                required_top5_hits += 1
+
+    return {
+        "context_cases": context_cases,
+        "context_attempts": context_attempts,
+        "context_files_sent": files_sent,
+        "context_chars_sent": chars_sent,
+        "context_truncated_files": truncated_files,
+        "context_truncation_rate": _rate(truncated_files, files_sent),
+        "context_fallback_files": fallback_files,
+        "context_fallback_rate": _rate(fallback_files, files_sent),
+        "required_context_paths": required_paths,
+        "required_context_hits": required_hits,
+        "required_context_recall": _rate(required_hits, required_paths),
+        "required_context_top5_hits": required_top5_hits,
+        "required_context_top5_recall": _rate(
+            required_top5_hits, required_paths
+        ),
+        "average_required_context_rank": (
+            round(sum(required_ranks) / len(required_ranks), 6)
+            if required_ranks
+            else 0.0
+        ),
+    }
+
+
 def _markdown_code(
     text: str, *, language: str = "text", limit: int = 4000
 ) -> list[str]:
@@ -399,6 +466,10 @@ def _markdown(result: EvaluationSuiteResult) -> str:
                 f"- Average attempts: **{metrics['average_attempts']:.3f}**",
                 f"- Static rejection rate: **{metrics['static_rejection_rate']:.2%}**",
                 f"- Verification failure rate: **{metrics['verification_failure_rate']:.2%}**",
+                f"- Required-path context recall: **{metrics['required_context_recall']:.2%}**",
+                f"- Required-path Top-5 recall: **{metrics['required_context_top5_recall']:.2%}**",
+                f"- Average required-path rank: **{metrics['average_required_context_rank']:.3f}**",
+                f"- Context sent: **{metrics['context_files_sent']} files / {metrics['context_chars_sent']} characters**",
             ]
         )
     lines.extend(

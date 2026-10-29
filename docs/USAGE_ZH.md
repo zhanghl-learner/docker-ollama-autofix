@@ -342,7 +342,9 @@ autofix evaluate-suite examples\complex-validation `
   --max-attempts 3
 ```
 
-每个有效用例仍通过 `evaluate_project()` 单独进行故障签名 preflight，并在 detached Git worktree 或非 Git 临时副本中修复；原 fixture 不写回。repair 聚合使用 JSON v2，记录模型、runner、尝试上限、首次通过率、平均尝试数、静态拒绝率、验证失败率、越界修改率和缺失必改文件率。baseline 继续使用兼容的 JSON v1。终端表格后的 `Failed case details` 显示完整失败摘要；逐用例 JSON 的 `evaluation.repair_details` 保存 proposal、静态拒绝和每轮验证失败的 diagnosis、diff、构建步骤与完整输出；Markdown 展开同样证据，但单段 diff/输出最多展示 4000 字符，完整内容以 JSON 为准。`--docker` 模式要求所有用例共享一个明确的 `--docker-image` 或套件级配置镜像；当前不会为混合语言用例自动切换多个镜像。
+每个有效用例仍通过 `evaluate_project()` 单独进行故障签名 preflight，并在 detached Git worktree 或非 Git 临时副本中修复；原 fixture 不写回。repair 聚合使用 [JSON v3](../schemas/autofix-evaluation-suite-v3.schema.json)，在 v2 的模型、runner、尝试次数和修复率指标上增加上下文召回率、Top-5 召回率、必改文件平均排名、发送文件/字符数、截断率和 fallback 比例；历史 v2 schema 保留，baseline 继续使用 JSON v1。终端表格后的 `Failed case details` 显示完整失败摘要；逐用例 JSON 的 `evaluation.repair_details` 保存 proposal、静态拒绝和每轮验证失败的 diagnosis、diff、构建步骤与完整输出；Markdown 展开同样证据，但单段 diff/输出最多展示 4000 字符，完整内容以 JSON 为准。`--docker` 模式要求所有用例共享一个明确的 `--docker-image` 或套件级配置镜像；当前不会为混合语言用例自动切换多个镜像。
+
+上下文召回以清单的 `required_change_paths` 为真值，只统计实际形成首轮上下文的 repair 用例。`required_context_recall` 表示必改路径是否进入首轮上下文，Top-5 指标进一步检查它是否足够靠前；多轮累计的 `context_files_sent` 与 `context_chars_sent` 用于估算模型输入成本。它们衡量检索质量，不代表模型一定能生成正确修改。
 
 人类可读模式默认启用实时进度：每个用例开始时显示基线复现；请求 Ollama 前显示本轮上下文文件和 `build-output`、`local-import:<来源>` 或 `project-source-fallback` 选择原因；等待 Ollama 和运行验证期间保持动态 spinner；收到 proposal 后显示 summary、diagnosis、目标文件、起始行和替换行数；静态拒绝或验证失败立即输出原因。全部结束后，`Verified repair changes` 会直接打印每个成功用例最终通过验证的 unified diff。自动化不需要动态输出时使用 `--no-progress`；`--json` 会强制静默进度，只在 stdout 输出一个合法 JSON 文档。
 

@@ -262,9 +262,9 @@ flowchart LR
     STAGE --> PUBLISH[原子发布 suite.json / suite.md / cases]
 ```
 
-单个用例的解析或执行失败只改变该用例状态，不中断其余用例；重复 `case.name` 会把所有冲突项标记为失败。只有根目录无清单、repair 缺少模型或聚合报告无法发布才属于套件级错误。`autofix-evaluation-suite` v1 固定为 `mode=baseline`；v2 固定为 `mode=repair` 并记录 AutoFix 版本、模型、runner、尝试上限和候选质量指标。失败异常携带内存态 `RepairResult`，因此 `--no-save` 不依赖读取临时 repair JSON 也能聚合拒绝和验证失败。
+单个用例的解析或执行失败只改变该用例状态，不中断其余用例；重复 `case.name` 会把所有冲突项标记为失败。只有根目录无清单、repair 缺少模型或聚合报告无法发布才属于套件级错误。`autofix-evaluation-suite` v1 固定为 `mode=baseline`；历史 v2 repair schema 记录候选质量，当前 v3 在同一 repair 外层契约上增加上下文检索和成本指标。失败异常携带内存态 `RepairResult`，因此 `--no-save` 不依赖读取临时 repair JSON 也能聚合拒绝和验证失败。
 
-v2 case 的外层字段保持稳定，失败摘要复用已有 `error`；完整证据放入开放的 `evaluation.repair_details`，所以增强诊断不需要改变 v2 顶层 schema。终端通过 `EvaluationSuiteCase.failure_summary` 区分契约不匹配、环境/模型错误、静态拒绝、验证失败和范围失败。JSON 不截断；Markdown 只截断超长展示片段，避免单份编译日志淹没整套报告。
+v3 case 的外层字段继续复用 v2，失败摘要仍使用 `error`；完整证据放入开放的 `evaluation.repair_details`。版本提升只因为严格 `metrics` 对象增加了必需字段，避免悄悄破坏 v2 schema。终端通过 `EvaluationSuiteCase.failure_summary` 区分契约不匹配、环境/模型错误、静态拒绝、验证失败和范围失败。JSON 不截断；Markdown 只截断超长展示片段，避免单份编译日志淹没整套报告。
 
 修复状态机通过可选 `RepairProgressCallback` 发出 `initial_verification_*`、`model_waiting`、`proposal_received/rejected`、`verification_started/failed`、`repair_succeeded/exhausted` 等不可变事件；回调只观察已有状态，不参与接受决策。套件将其包装为带用例序号和相对路径的 `EvaluationSuiteProgressEvent`。CLI renderer 在阻塞的模型请求和构建期间维护 Rich spinner，在状态边界停止 spinner 并写入持久终端行。`--json` 不注册 renderer，因此机器输出不会混入日志。
 
@@ -408,6 +408,8 @@ flowchart TD
 `collect_source_context_with_metadata()` 先从构建输出提取直接引用文件，再有界遍历这些文件能够解析到的项目内依赖：Python 的 `import/from`、JavaScript/TypeScript 的相对 `import/require`、C/C++ 的引号 `include`。遍历带 visited 集合并最多检查 `max_files × 4` 个节点，因此能经过 `__init__.py` 重导出找到实现，又不会被循环或巨大依赖图拖住。Python 绝对模块若不在项目根目录，还可以通过唯一的模块后缀映射到常见 `src/` 布局；出现两个候选时放弃映射，不任意选择。排序依次考虑直接引用的生产文件、本地导入的生产文件、直接引用的测试、其余导入与项目回退源码。这样即使堆栈只指向测试，也能在文件预算耗尽前把被测实现交给模型。`collect_source_context()` 保留兼容的字典返回值。
 
 每个实际入选文件都生成 `ContextSelection`：记录项目相对路径、`build-output` / `local-import:<来源>` / `project-source-fallback` 原因、测试属性、发送字符数和是否截断。repair report 按 attempt 保存这些不含源码正文的元数据；套件终端在请求模型前显示前六项。模型提示也收到同一原因列表，但它只用于相关性说明，不授予编辑权限。
+
+repair suite JSON v3 把这些记录聚合为检索质量与成本指标。首轮上下文和清单 `required_change_paths` 计算 required-path recall、Top-5 recall 与平均命中排名；所有尝试累计文件数、字符数、截断与 fallback。v1 baseline、历史 v2 repair schema 保持不变，因此旧报告不会被新字段重新解释。
 
 上下文收集入口会先将项目根路径规范化，再处理目录遍历结果和构建输出中的文件路径。这用于统一 Windows 8.3 短路径（例如 `RUNNER~1`）与长路径所指向的同一目录；随后仍以解析后的候选路径执行根目录包含检查，因此路径别名兼容不会放宽项目边界或允许读取项目外文件。
 

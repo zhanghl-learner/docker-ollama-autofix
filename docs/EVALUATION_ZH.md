@@ -142,7 +142,7 @@ autofix evaluate-suite examples\complex-validation `
   --max-attempts 3
 ```
 
-每个清单先独立匹配 `expected_failure`，不匹配时该用例的模型调用数保持为 0。匹配后复用单用例的 detached Git worktree/临时副本、路径策略、精确旧文本、破坏性检查与完整验证矩阵；无论成功或失败都不写回 fixture。repair 聚合遵循 [`autofix-evaluation-suite` v2 schema](../schemas/autofix-evaluation-suite-v2.schema.json)，增加 `autofix_version`、`model`、`runner`、`max_attempts` 和以下指标：
+每个清单先独立匹配 `expected_failure`，不匹配时该用例的模型调用数保持为 0。匹配后复用单用例的 detached Git worktree/临时副本、路径策略、精确旧文本、破坏性检查与完整验证矩阵；无论成功或失败都不写回 fixture。repair 聚合遵循 [`autofix-evaluation-suite` v3 schema](../schemas/autofix-evaluation-suite-v3.schema.json)；历史 v2 schema 保留用于读取旧报告。v3 包含 `autofix_version`、`model`、`runner`、`max_attempts` 和以下指标：
 
 | 指标 | 含义 |
 | --- | --- |
@@ -155,8 +155,15 @@ autofix evaluate-suite examples\complex-validation `
 | `verification_failure_rate` | 可应用但构建失败的候选数 / proposal 总数 |
 | `unexpected_change_rate` | 出现越界修改的用例数 / attempted |
 | `missing_required_change_rate` | 未触及必改文件的用例数 / attempted |
+| `required_context_recall` | 清单必改路径进入首轮上下文的比例 |
+| `required_context_top5_recall` | 清单必改路径进入首轮上下文前五名的比例 |
+| `average_required_context_rank` | 已命中必改路径的首轮平均排名，越低越好 |
+| `context_files_sent` / `context_chars_sent` | 所有模型尝试累计发送的文件和字符规模 |
+| `context_truncation_rate` / `context_fallback_rate` | 截断文件及无直接依赖依据的回退文件比例 |
 
 分母为 0 时比例固定为 `0.0`，同时保留原始计数，使用者不能把 0% 误读为已经发生过成功评测。模型连接/协议失败、环境门禁和无安全候选仍作为失败用例保留；`--no-save` 只禁止落盘，不会清空静态拒绝与验证失败的内存统计。
+
+上下文指标的分母只包含确实形成首轮上下文且声明了 `required_change_paths` 的 repair 用例。环境门禁或故障契约不匹配导致模型未启动时不会被误记为检索失败。召回率衡量“模型是否看见正确文件”，修复通过率衡量“看见之后是否提出并验证了正确修改”，两者必须分开解释。
 
 ### 6.1 失败证据与报告层级
 

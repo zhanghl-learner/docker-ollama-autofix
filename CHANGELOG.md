@@ -4,6 +4,8 @@
 
 ### Added
 
+- 新增严格的 repair suite JSON schema v3；聚合 required-path context recall、Top-5 recall、平均命中排名、累计文件/字符、截断率和 fallback 比例，v1 baseline 与历史 v2 repair schema 保留。
+- 终端和 suite Markdown 展示上下文召回、排名与发送规模，使“上下文未命中”和“模型生成失败”可以分别诊断。
 - 新增可审计的 `SourceContext` / `ContextSelection`：从构建输出直接路径出发，有界遍历 Python（含包重导出和唯一模块后缀的 `src/` 布局）、JavaScript/TypeScript 与 C/C++ 本地依赖，并记录选择原因、测试属性、字符数和截断状态。
 - repair/evaluation 报告按尝试保存上下文选择元数据；`evaluate-suite` 在请求 Ollama 前显示前六个入选文件及原因，模型提示收到同一相关性说明。
 - 验证失败重试上下文新增 persistent original failures、new failures 与 diagnosis→控制流→diff 一致性审计，要求确认失败输入能够到达被编辑语句。
@@ -53,7 +55,7 @@
 
 ### Verified
 
-- Windows 本机 235 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、实时进度/终端 diff、语义重试、可解释上下文排序、workflow YAML 和 JSON schema 检查通过。
+- Windows 本机 236 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、实时进度/终端 diff、语义重试、可解释上下文排序与 v3 检索指标、workflow YAML 和 JSON schema 检查通过。
 - 隔离 PEP 517 wheel 构建通过，并确认 `autofix/repository.py`、`autofix/agent/artifacts.py` 与 `autofix/evaluation_suite.py` 已包含在生成包中。
 - 使用 `qwen2.5-coder:7b` 在独立 Git 仓库完成失败复现、detached-worktree 预览、plan v4 重放、指定 patch 输出和显式本地 commit 闭环；最终 commit 只包含目标源码并保留 diff trailer。
 

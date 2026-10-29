@@ -88,6 +88,8 @@ CLI 负责参数、用户输出和退出码，不应承载核心修复算法。
 
 `repair.py` 把选择原因传给 `ollama.py`，同时按 attempt 写入审计结果。`ollama.py` 只把原因作为相关性元数据；动态路径枚举仍单独决定哪些文件可编辑，因此“被选中”不会绕过测试保护。
 
+`evaluation_suite.py` 的 `_context_quality_metrics()` 只读取这些元数据和评测清单的 `required_change_paths`。首轮选择用于召回/排名，多轮选择用于累计输入成本；它不读取模型解释，也不根据最终是否修复成功反推检索质量。
+
 模型响应永远按不可信输入处理。JSON Schema 只是第一层格式约束，不代表路径和代码安全。
 
 ## 8. 修改安全：`patches.py`

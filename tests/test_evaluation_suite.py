@@ -7,6 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from autofix.agent.ollama import FileEdit, RepairProposal
+from autofix.agent.context import ContextSelection, SourceContext
 from autofix.cli import app
 from autofix.evaluation_suite import (
     EvaluationSuiteError,
@@ -333,7 +334,7 @@ def test_repair_suite_scores_first_attempts_without_mutating_cases(
 
     assert result.passed
     assert result.mode == "repair"
-    assert result.to_dict()["version"] == 2
+    assert result.to_dict()["version"] == 3
     assert result.model == "fixed-model"
     assert result.to_dict()["autofix_version"]
     assert result.metrics["repair_eligible"] == 2
@@ -343,13 +344,25 @@ def test_repair_suite_scores_first_attempts_without_mutating_cases(
     assert result.metrics["average_attempts"] == 1.0
     assert result.metrics["static_rejection_rate"] == 0.0
     assert result.metrics["verification_failure_rate"] == 0.0
+    assert result.metrics["context_cases"] == 2
+    assert result.metrics["context_attempts"] == 2
+    assert result.metrics["context_files_sent"] == 4
+    assert result.metrics["required_context_paths"] == 2
+    assert result.metrics["required_context_hits"] == 2
+    assert result.metrics["required_context_recall"] == 1.0
+    assert result.metrics["required_context_top5_recall"] == 1.0
+    assert result.metrics["average_required_context_rank"] == 1.0
+    assert result.metrics["context_fallback_files"] == 4
+    assert result.metrics["context_fallback_rate"] == 1.0
+    assert result.metrics["context_truncated_files"] == 0
+    assert result.metrics["context_truncation_rate"] == 0.0
     assert result.json_report_path is not None and result.json_report_path.is_file()
     assert result.markdown_report_path is not None
     markdown = result.markdown_report_path.read_text(encoding="utf-8")
     assert "Mode: `repair`" in markdown
     assert "Model: `fixed-model`" in markdown
     aggregate = json.loads(result.json_report_path.read_text(encoding="utf-8"))
-    assert aggregate["version"] == 2
+    assert aggregate["version"] == 3
     assert aggregate["metrics"]["first_attempt_pass_rate"] == 1.0
     phases = [
         event.repair.phase
@@ -367,6 +380,42 @@ def test_repair_suite_scores_first_attempts_without_mutating_cases(
         (path / "calculator.py").read_bytes() == content
         for path, content in originals.items()
     )
+
+
+def test_repair_suite_measures_required_path_missing_from_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _repair_case(tmp_path / "missing-context", "missing-context")
+
+    def unrelated_context(*_: object, **__: object) -> SourceContext:
+        return SourceContext(
+            {"check.py": "raise SystemExit(1)\n"},
+            (
+                ContextSelection(
+                    "check.py", "project-source-fallback", False, 20, False
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        "autofix.agent.repair.collect_source_context_with_metadata",
+        unrelated_context,
+    )
+
+    result = evaluate_suite(
+        tmp_path,
+        client=FixedRepairClient(),
+        model="fixed-model",
+        save_report=False,
+    )
+
+    assert result.passed
+    assert result.metrics["required_context_paths"] == 1
+    assert result.metrics["required_context_hits"] == 0
+    assert result.metrics["required_context_recall"] == 0.0
+    assert result.metrics["required_context_top5_hits"] == 0
+    assert result.metrics["required_context_top5_recall"] == 0.0
+    assert result.metrics["average_required_context_rank"] == 0.0
 
 
 def test_repair_suite_keeps_rejection_metrics_when_reports_are_disabled(
@@ -460,7 +509,7 @@ def test_repair_suite_does_not_call_model_for_mismatched_failure_contract(
     )
 
 
-def test_committed_repair_suite_schema_matches_v2_envelope(tmp_path: Path) -> None:
+def test_committed_repair_suite_schema_matches_v3_envelope(tmp_path: Path) -> None:
     _repair_case(tmp_path / "repair", "repair")
     payload = evaluate_suite(
         tmp_path,
@@ -471,7 +520,7 @@ def test_committed_repair_suite_schema_matches_v2_envelope(tmp_path: Path) -> No
     schema_path = (
         Path(__file__).resolve().parents[1]
         / "schemas"
-        / "autofix-evaluation-suite-v2.schema.json"
+        / "autofix-evaluation-suite-v3.schema.json"
     )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
 
@@ -506,7 +555,7 @@ def test_evaluate_suite_cli_repair_uses_selected_model(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["version"] == 2
+    assert payload["version"] == 3
     assert payload["mode"] == "repair"
     assert payload["model"] == "fixed-model"
     assert payload["autofix_version"]
