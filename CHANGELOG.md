@@ -4,6 +4,9 @@
 
 ### Added
 
+- 新增无交互 `autofix ci-check`：stdout 固定输出 `autofix-ci-result` JSON v1，并使用保留退出码区分通过、验证失败、环境错误、策略拒绝、配置错误和内部错误。
+- `ci-check --output` 通过同目录临时文件和原子替换写入与 stdout 相同的 JSON；默认要求干净且已有 HEAD 的 Git 仓库，默认不产生普通 run 报告。
+- 新增学习导读、核心代码导读、动手实验和 CI 契约文档，README 提供统一入口。
 - 新增只读 `autofix git-status [PATH]`，报告 Git 可用性、仓库根目录、分支或 detached HEAD、基线 commit、tracked/untracked 变更和 direct-apply 策略。
 - `autofix git-status --require-clean` 在非 Git 目录或脏工作区返回 1，可作为 CI 和 repair/worktree 的前置门禁；`--json` 输出稳定结构。
 - 新增真实临时仓库测试，覆盖非 Git、干净/未提交基线仓库、tracked/untracked 修改、rename、detached HEAD 和 CLI 干净门禁。
@@ -25,17 +28,17 @@
 ### CI
 
 - Windows/Linux 测试任务在编译和 pytest 前验证干净 Git 检出契约。
+- Windows/Linux pytest 改由 `autofix ci-check` 执行，并通过 `actions/upload-artifact@v7` 始终上传 JSON/JUnit 证据；workflow 不调用模型或自动修改仓库。
 
 ### Verified
 
-- Windows 本机 199 项 pytest、`compileall`、Python/Node 复杂 fixture 基线和 workflow YAML 检查通过。
+- Windows 本机 209 项 pytest、`compileall`、Python/Node 复杂 fixture 基线和 workflow YAML 检查通过。
 - 隔离 PEP 517 wheel 构建通过，并确认 `autofix/repository.py` 与 `autofix/agent/artifacts.py` 已包含在生成包中。
 - 使用 `qwen2.5-coder:7b` 在独立 Git 仓库完成失败复现、detached-worktree 预览、plan v4 重放、指定 patch 输出和显式本地 commit 闭环；最终 commit 只包含目标源码并保留 diff trailer。
 
 ### Fixed
 
 - detached Git worktree 因 `core.autocrlf` 使用 CRLF、而调用方原文件仍为 LF 时，隔离结果现在会在生成 report/patch/plan 和写回前规范化到原文件换行风格，避免安全的 diff SHA-256 校验错误拒绝同一方案。
-
 - Windows 临时工作区在 8.3 短路径（如 `RUNNER~1`）与长路径混用时，源码上下文收集不再因纯词法 `relative_to()` 比较而失败；收集入口现在统一规范化项目根路径，并保留解析后路径的项目边界检查。
 - 新增非规范根路径与已解析构建输出路径混用的回归测试，覆盖 GitHub 托管 Windows runner 暴露的路径身份问题；同时验证构建输出引用的项目外源码仍不会被收集。
 - Windows 相对项目可执行文件集成测试改用临时 `.cmd`，不再复制系统 `cmd.exe`；保留 `shell=False` 的真实执行覆盖，同时兼容 GitHub 托管 Windows runner 的安全策略。

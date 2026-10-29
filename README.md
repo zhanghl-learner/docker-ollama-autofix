@@ -19,6 +19,10 @@ The next development phase is **safe real-repository integration and evaluation 
 - [多语言闭环验证报告](docs/MULTILANG_VALIDATION_ZH.md) — real Python, Node.js, Go, C++, and Java repair results plus missing-toolchain gates.
 - [复杂项目评测指南](docs/EVALUATION_ZH.md) — benchmark contracts, isolated model scoring, metrics, and fixture authoring.
 - [开发路线图与发布准备](docs/ROADMAP_ZH.md) — product positioning, maturity boundaries, milestone priorities, and definition of done.
+- [学习导读](docs/LEARNING_GUIDE_ZH.md) — a progressive mental model and study path for new maintainers.
+- [核心代码导读](docs/CORE_CODE_WALKTHROUGH_ZH.md) — the main call paths, data contracts, and module responsibilities.
+- [动手实验](docs/HANDS_ON_ZH.md) — reproducible exercises for preview, plan, patch, commit, and safety rejection.
+- [CI JSON 契约](docs/CI_CONTRACT_ZH.md) — stable statuses, reserved exit codes, JSON schema, and GitHub Actions usage.
 - [Changelog](CHANGELOG.md) — versioned feature and verification summary.
 
 ## Architecture at a glance
@@ -61,6 +65,7 @@ The model proposes edits but never decides acceptance and never writes directly 
 - `autofix inspect [PATH]` detects Python, CMake, Maven, Gradle, npm/pnpm/yarn, Rust, and Go projects; polyglot repositories can select a detected system with `--build-system` or `build.system`.
 - `autofix git-status [PATH]` reports the repository root, branch or detached HEAD, baseline commit, tracked/untracked paths, and direct-apply policy without changing Git. Add `--require-clean` for a CI/preflight cleanliness gate.
 - `autofix run [PATH]` executes the selected build plan without a shell and saves a JSON report under `.autofix/runs/`.
+- `autofix ci-check [PATH]` performs non-interactive verification with a versioned JSON envelope and reserved exit codes for pass, verification failure, environment failure, policy rejection, configuration failure, and internal failure.
 - Ordered build matrices can be declared with `build.commands` or repeated `--step`; execution stops at the first failing step and repair is accepted only when every step passes.
 - `autofix repair [PATH]` requires a clean committed Git baseline, then runs baseline reproduction, model edits, and verification in a detached temporary worktree. Dirty/unborn repositories stop before build or Ollama; non-Git projects retain disposable-copy isolation.
 - Failed verified candidates are audited with their exact diff and test regressions, then discarded before the next attempt. Retries start from the same clean baseline, receive cumulative evidence, reject duplicate/cyclic states, and require a structured causal diagnosis before editing.

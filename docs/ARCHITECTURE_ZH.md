@@ -32,6 +32,7 @@ flowchart TB
 
     subgraph Interface[接口层]
         CLI[Typer CLI<br/>cli.py]
+        CI[CI JSON envelope<br/>ci.py]
         CONFIG[全局与项目配置<br/>config.py]
         DETECT[项目及工具链检测<br/>detectors/project.py]
         GIT[Git 状态与 worktree 生命周期<br/>repository.py]
@@ -70,6 +71,7 @@ flowchart TB
     end
 
     USER --> CLI
+    CLI --> CI
     CLI --> CONFIG
     CLI --> DETECT
     CLI --> GIT
@@ -116,7 +118,7 @@ flowchart TB
 | 项目路径、Git porcelain v1 | `GitWorkspaceStatus`、`GitChange` | 仓库身份、HEAD、脏工作区策略 |
 | 失败的 `BuildResult`、受限源码 | Ollama JSON、`RepairProposal` | 候选 `FileEdit` |
 | 原文件、候选编辑 | `ValidatedChange` | 精确 diff 或拒绝原因 |
-| 验证后的修改、执行策略 | `RepairPlan` v3 | 可审核、可确定性应用的 JSON |
+| 验证后的修改、执行策略 | `RepairPlan` v4 | 可审核、可确定性应用的 JSON |
 | 成功 repair 报告、当前文件 | 反向 diff 与 hash 检查 | rollback 备份和回执 |
 
 ## 3. 代码目录与职责
@@ -124,6 +126,7 @@ flowchart TB
 ```text
 src/autofix/
 ├── cli.py                  # 命令、参数、用户输出和退出码
+├── ci.py                   # CI schema v1、状态分类、固定退出码与原子结果写入
 ├── config.py               # 用户级/项目级 YAML 合并与校验
 ├── evaluation.py           # 评测契约、隔离 repair 计分与 JSON 报告
 ├── models.py               # BuildStep、ProjectMatch、ProjectInspection
@@ -205,6 +208,29 @@ flowchart TD
 ```
 
 首轮温度为 0，保证可重复；有失败证据的重试使用 0.15，帮助模型离开已证伪的局部答案。随机性不能绕过任何安全边界：JSON Schema、精确旧文本、路径限制、破坏性检查和真实构建仍全部执行。模型协议要求 `diagnosis` 只报告因果文件、编号行和分支事实，不要求也不保存隐藏推理过程。
+
+### 3.1 CI 契约边界
+
+`ci.py` 不实现新的构建器，也不调用模型。`ci-check` 复用项目检测、Git 只读状态、`run_build`/`run_build_docker` 和环境错误分类，再把结果映射到固定 envelope：
+
+```mermaid
+flowchart LR
+    INPUT[ci-check 参数] --> GIT{Git/clean 策略}
+    GIT -->|拒绝| P[policy_rejected / 30]
+    GIT -->|通过| CONFIG{检测与配置}
+    CONFIG -->|无效| C[configuration_error / 40]
+    CONFIG --> BUILD[local 或 Docker BuildResult]
+    BUILD -->|全部通过| OK[passed / 0]
+    BUILD -->|环境特征| ENV[environment_error / 20]
+    BUILD -->|普通失败| FAIL[verification_failed / 10]
+    OK --> JSON[JSON v1 stdout + 可选原子文件]
+    P --> JSON
+    C --> JSON
+    ENV --> JSON
+    FAIL --> JSON
+```
+
+未预期异常映射为 `internal_error / 70`，避免 CI 只能看到不可区分的退出码 1。原始工具退出码仍保存在 `BuildResult`，所以固定契约不会丢失诊断信息。该入口默认不保存 `.autofix/runs`，避免仅为 CI 取证污染 checkout；`--save-run-report` 为显式选择。
 
 ## 4. 配置系统
 

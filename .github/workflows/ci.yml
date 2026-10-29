@@ -40,8 +40,11 @@ jobs:
       - name: Compile source and tests
         run: python -m compileall -q src tests
 
-      - name: Run automated tests
-        run: python -m pytest -q --junitxml=pytest-results.xml
+      - name: Run automated tests through AutoFix CI contract
+        run: >-
+          autofix ci-check .
+          --command "python -m pytest -q --junitxml=pytest-results.xml"
+          --output "${{ runner.temp }}/autofix-ci-result.json"
 
       - name: Publish pytest failure annotations
         if: failure()
@@ -58,6 +61,16 @@ jobs:
           if (-not $failed) {
             Write-Output '::error title=pytest failure::pytest failed without a JUnit failure node'
           }
+
+      - name: Upload AutoFix CI evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: autofix-ci-${{ runner.os }}
+          path: |
+            ${{ runner.temp }}/autofix-ci-result.json
+            pytest-results.xml
+          if-no-files-found: warn
 
       - name: Validate Python evaluation baseline
         run: autofix evaluate examples/complex-validation/python-order-service --no-save

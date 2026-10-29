@@ -342,6 +342,7 @@ autofix evaluate examples\complex-validation\python-order-service `
 | `autofix repair .` | 隔离预览并生成验证过的 plan | 否 |
 | `autofix repair . --apply` | 隔离验证成功后写回 | 是 |
 | `autofix apply-plan PLAN --project .` | 应用已审核且 hash 未过期的 plan | 是 |
+| `autofix ci-check . --output ci-result.json` | CI 无交互验证与稳定 JSON/退出码 | 否 |
 | `autofix history .` | 查看修复历史 | 否 |
 | `autofix undo .` | 撤销最近一次尚未撤销的成功修复 | 是；先备份当前版本 |
 | `autofix rollback REPORT --project .` | 按指定报告撤销 | 是；先备份当前版本 |
@@ -355,8 +356,19 @@ autofix evaluate examples\complex-validation\python-order-service `
 autofix --help
 autofix repair --help
 autofix apply-plan --help
+autofix ci-check --help
 autofix bundle --help
 ```
+
+### CI 无交互验证
+
+```powershell
+autofix ci-check . `
+  --command "python -m pytest -q --junitxml=pytest-results.xml" `
+  --output "$env:TEMP\autofix-ci-result.json"
+```
+
+`ci-check` 默认要求干净且已有 commit 的 Git 仓库，stdout 只输出一个 JSON 文档，不调用 Ollama、不修复源码，也不创建 commit。退出码 0/10/20/30/40/70 分别表示通过、验证失败、环境错误、策略拒绝、配置错误和内部错误；构建工具的原始退出码保留在 JSON 的 `build` 中。完整 schema、兼容规则与 GitHub Actions 示例见 [CI JSON 契约](CI_CONTRACT_ZH.md)。
 
 ## 9. Docker 隔离参数
 

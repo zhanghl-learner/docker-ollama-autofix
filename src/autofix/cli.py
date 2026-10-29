@@ -37,6 +37,7 @@ from autofix.builders import (
     run_build,
     run_build_docker,
 )
+from autofix.ci import CIExitCode, CIResult, result_from_build, save_ci_result
 from autofix.detectors import inspect_project
 from autofix.evaluation import (
     EvaluationError,
@@ -806,6 +807,185 @@ def evaluate(
             )
     if not result.passed:
         raise typer.Exit(code=1)
+
+
+@app.command("ci-check")
+def ci_check(
+    path: Path = typer.Argument(
+        Path("."), exists=True, file_okay=False, resolve_path=True
+    ),
+    command: str | None = typer.Option(
+        None, "--command", "-c", help="Override the detected build command."
+    ),
+    step: list[str] | None = typer.Option(
+        None, "--step", help="Verification command; repeat for an ordered matrix."
+    ),
+    build_system: str | None = typer.Option(
+        None, help="Select one of the detected build systems."
+    ),
+    timeout: float = typer.Option(300, min=0.1, help="Timeout for each step."),
+    require_git: bool = typer.Option(
+        True,
+        "--require-git/--allow-unversioned",
+        help="Require a repository with a committed HEAD baseline.",
+    ),
+    require_clean: bool = typer.Option(
+        True,
+        "--require-clean/--allow-dirty",
+        help="Reject tracked or untracked Git changes before execution.",
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        dir_okay=False,
+        help="Atomically write the same JSON result to this file.",
+    ),
+    save_run_report: bool = typer.Option(
+        False,
+        "--save-run-report/--no-save-run-report",
+        help="Also save the ordinary .autofix/runs report.",
+    ),
+    docker: bool = typer.Option(False, "--docker", help="Run in constrained Docker."),
+    docker_image: str | None = typer.Option(None, help="Override the configured image."),
+    docker_cpus: float = typer.Option(2.0, min=0.1, max=64),
+    docker_memory: str = typer.Option("2g"),
+    docker_pids: int = typer.Option(256, min=16, max=4096),
+    allow_network: bool = typer.Option(False),
+) -> None:
+    """Run a non-interactive verification with stable JSON and exit codes."""
+
+    root = path.expanduser().resolve()
+    repository = None
+    runner_name: str | None = "docker" if docker else "local"
+    result: CIResult
+    try:
+        repository = inspect_git_workspace(root)
+        if require_git and not repository.is_repository:
+            result = CIResult(
+                "policy_rejected",
+                CIExitCode.POLICY_REJECTED,
+                root,
+                runner_name,
+                repository,
+                error="CI policy requires a Git repository.",
+            )
+        elif require_git and repository.head_commit is None:
+            result = CIResult(
+                "policy_rejected",
+                CIExitCode.POLICY_REJECTED,
+                root,
+                runner_name,
+                repository,
+                error="CI policy requires a committed Git HEAD baseline.",
+            )
+        elif require_clean and repository.is_repository and not repository.clean:
+            result = CIResult(
+                "policy_rejected",
+                CIExitCode.POLICY_REJECTED,
+                root,
+                runner_name,
+                repository,
+                error="CI policy requires a clean Git worktree.",
+            )
+        else:
+            config = load_config(root)
+            inspection = inspect_project(root)
+            inspection = inspection.select(
+                build_system or (config.build_system if config else None)
+            )
+            steps = _selected_build_steps(command, step, config, inspection)
+            if not steps:
+                raise ConfigError(
+                    "No supported build system detected; pass --command explicitly"
+                )
+            docker_config: DockerConfig | None = None
+            if docker:
+                if config and config.offline and allow_network:
+                    raise ConfigError(
+                        "--allow-network conflicts with runtime.offline: true in autofix.yml"
+                    )
+                docker_config = _docker_config(
+                    inspection,
+                    docker_image or (config.docker_image if config else None),
+                    docker_cpus,
+                    docker_memory,
+                    docker_pids,
+                    allow_network,
+                )
+            try:
+                if docker_config:
+                    _require_docker()
+                    build = run_build_docker(
+                        root,
+                        steps,
+                        config=docker_config,
+                        timeout_seconds=timeout,
+                        save_report=save_run_report,
+                    )
+                else:
+                    build = run_build(
+                        root,
+                        steps,
+                        timeout_seconds=timeout,
+                        save_report=save_run_report,
+                    )
+            except DockerConfigurationError as exc:
+                result = CIResult(
+                    "environment_error",
+                    CIExitCode.ENVIRONMENT_ERROR,
+                    root,
+                    runner_name,
+                    repository,
+                    error=str(exc),
+                )
+            else:
+                result = result_from_build(
+                    root, repository, build, runner=runner_name or "local"
+                )
+    except GitInspectionError as exc:
+        result = CIResult(
+            "policy_rejected",
+            CIExitCode.POLICY_REJECTED,
+            root,
+            runner_name,
+            repository,
+            error=str(exc),
+        )
+    except (ConfigError, DockerConfigurationError, ValueError) as exc:
+        result = CIResult(
+            "configuration_error",
+            CIExitCode.CONFIGURATION_ERROR,
+            root,
+            runner_name,
+            repository,
+            error=str(exc),
+        )
+    except Exception as exc:
+        result = CIResult(
+            "internal_error",
+            CIExitCode.INTERNAL_ERROR,
+            root,
+            runner_name,
+            repository,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+    if output is not None:
+        try:
+            save_ci_result(output, result)
+        except OSError as exc:
+            result = CIResult(
+                "internal_error",
+                CIExitCode.INTERNAL_ERROR,
+                root,
+                runner_name,
+                repository,
+                result.build,
+                f"Unable to write CI result: {exc}",
+            )
+    typer.echo(json.dumps(result.to_dict(), ensure_ascii=False))
+    if result.exit_code != CIExitCode.PASSED:
+        raise typer.Exit(code=int(result.exit_code))
 
 
 @app.command()

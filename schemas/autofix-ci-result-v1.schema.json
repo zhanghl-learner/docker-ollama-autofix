@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zhanghl-learner/docker-ollama-autofix/blob/main/schemas/autofix-ci-result-v1.schema.json",
+  "title": "AutoFix CI Result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "created_at",
+    "status",
+    "exit_code",
+    "root",
+    "runner",
+    "repository",
+    "build",
+    "error"
+  ],
+  "properties": {
+    "schema": {"const": "autofix-ci-result"},
+    "version": {"const": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "status": {
+      "enum": [
+        "passed",
+        "verification_failed",
+        "environment_error",
+        "policy_rejected",
+        "configuration_error",
+        "internal_error"
+      ]
+    },
+    "exit_code": {"enum": [0, 10, 20, 30, 40, 70]},
+    "root": {"type": "string", "minLength": 1},
+    "runner": {"enum": ["local", "docker", null]},
+    "repository": {"type": ["object", "null"]},
+    "build": {"type": ["object", "null"]},
+    "error": {"type": ["string", "null"]}
+  },
+  "allOf": [
+    {"if": {"properties": {"status": {"const": "passed"}}}, "then": {"properties": {"exit_code": {"const": 0}}}},
+    {"if": {"properties": {"status": {"const": "verification_failed"}}}, "then": {"properties": {"exit_code": {"const": 10}}}},
+    {"if": {"properties": {"status": {"const": "environment_error"}}}, "then": {"properties": {"exit_code": {"const": 20}}}},
+    {"if": {"properties": {"status": {"const": "policy_rejected"}}}, "then": {"properties": {"exit_code": {"const": 30}}}},
+    {"if": {"properties": {"status": {"const": "configuration_error"}}}, "then": {"properties": {"exit_code": {"const": 40}}}},
+    {"if": {"properties": {"status": {"const": "internal_error"}}}, "then": {"properties": {"exit_code": {"const": 70}}}}
+  ]
+}
