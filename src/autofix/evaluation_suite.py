@@ -14,7 +14,7 @@ from time import monotonic
 from typing import Any, Callable
 
 from autofix import __version__
-from autofix.agent.repair import RepairClient
+from autofix.agent.repair import RepairClient, RepairResult
 from autofix.builders import BuildResult, run_build
 from autofix.evaluation import (
     EvaluationError,
@@ -72,10 +72,53 @@ class EvaluationSuiteCase:
             return self.error_kind
         return "passed" if self.passed else "failed"
 
+    @property
+    def failure_summary(self) -> str | None:
+        """Explain a failed case without requiring consumers to inspect raw builds."""
+
+        if self.passed:
+            return None
+        if self.error:
+            return self.error
+        if self.result is None:
+            return "Evaluation did not produce a result"
+        if self.result.failure_contract_mismatches:
+            return "; ".join(self.result.failure_contract_mismatches)
+        if self.result.repair_error:
+            return self.result.repair_error
+        evidence = _repair_evidence(self.result)
+        if evidence and evidence.verification_failures:
+            count = len(evidence.verification_failures)
+            last_build = evidence.verification_failures[-1].build
+            failed_step = last_build.steps[-1] if last_build.steps else None
+            suffix = (
+                f"; last failure: {failed_step.label} exited {failed_step.exit_code}"
+                if failed_step
+                else ""
+            )
+            return (
+                f"{count} proposal(s) passed static checks but failed verification"
+                f"{suffix}"
+            )
+        if evidence and evidence.rejections:
+            return (
+                f"{len(evidence.rejections)} proposal(s) rejected by safety checks; "
+                f"last rejection: {evidence.rejections[-1].reason}"
+            )
+        if self.result.unexpected_change_paths:
+            return "Repair changed paths outside the evaluation contract"
+        if self.result.missing_required_paths:
+            return "Repair did not change every required path"
+        return "Evaluation contract failed"
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize one case without dropping its failure evidence."""
 
         manifest = self.result.manifest if self.result else None
+        evaluation = self.result.to_dict() if self.result else None
+        if evaluation is not None and self.result and self.result.mode == "repair":
+            evidence = _repair_evidence(self.result)
+            evaluation["repair_details"] = evidence.to_dict() if evidence else None
         return {
             "root": str(self.case_root),
             "relative_root": self.relative_root,
@@ -88,8 +131,8 @@ class EvaluationSuiteCase:
             "passed": self.passed,
             "duration_seconds": self.duration_seconds,
             "error_kind": self.error_kind,
-            "error": self.error,
-            "evaluation": self.result.to_dict() if self.result else None,
+            "error": self.error or self.failure_summary,
+            "evaluation": evaluation,
             "report_path": str(self.report_path) if self.report_path else None,
         }
 
@@ -269,6 +312,23 @@ def _rate(numerator: int, denominator: int) -> float:
     return round(numerator / denominator, 6) if denominator else 0.0
 
 
+def _repair_evidence(result: EvaluationResult) -> RepairResult | None:
+    """Return successful, failed-verification, or rejected repair evidence."""
+
+    return result.repair or result.repair_evidence
+
+
+def _markdown_code(
+    text: str, *, language: str = "text", limit: int = 4000
+) -> list[str]:
+    """Render a bounded code block while preserving full output in JSON."""
+
+    normalized = text.replace("```", "` ` `")
+    if len(normalized) > limit:
+        normalized = normalized[:limit] + "\n... output truncated in Markdown; see JSON ..."
+    return [f"```{language}", normalized.rstrip(), "```"]
+
+
 def discover_evaluation_cases(root: Path | str) -> tuple[Path, ...]:
     """Find manifests deterministically without traversing generated directories."""
 
@@ -333,11 +393,7 @@ def _markdown(result: EvaluationSuiteResult) -> str:
     )
     for case in result.cases:
         manifest = case.result.manifest if case.result else None
-        error = (
-            case.error
-            or (case.result.repair_error if case.result else None)
-            or ""
-        ).replace("|", "\\|").replace("\n", " ")
+        error = (case.failure_summary or "").replace("|", "\\|").replace("\n", " ")
         lines.append(
             "| "
             + " | ".join(
@@ -355,6 +411,57 @@ def _markdown(result: EvaluationSuiteResult) -> str:
             )
             + " |"
         )
+    failed_repairs = [
+        case
+        for case in result.cases
+        if not case.passed
+        and case.result is not None
+        and _repair_evidence(case.result) is not None
+    ]
+    if failed_repairs:
+        lines.extend(["", "## Failed repair evidence"])
+    for case in failed_repairs:
+        case_result = case.result
+        assert case_result is not None
+        evidence = _repair_evidence(case_result)
+        assert evidence is not None
+        lines.extend(["", f"### `{case.relative_root}`"])
+        for rejection in evidence.rejections:
+            lines.extend(
+                [
+                    "",
+                    f"#### Attempt {rejection.attempt}: static rejection",
+                    "",
+                    f"- Summary: {rejection.summary}",
+                    f"- Reason: {rejection.reason}",
+                ]
+            )
+        for failure in evidence.verification_failures:
+            lines.extend(
+                [
+                    "",
+                    f"#### Attempt {failure.attempt}: verification failure",
+                    "",
+                    f"- Summary: {failure.summary}",
+                    f"- Diagnosis: {failure.diagnosis}",
+                ]
+            )
+            for change in failure.changes:
+                lines.extend(["", f"Changed `{change.relative_path}`:", ""])
+                lines.extend(_markdown_code(change.diff, language="diff"))
+            if failure.build.steps:
+                step = failure.build.steps[-1]
+                lines.extend(
+                    [
+                        "",
+                        f"Failed step: `{step.label}` (exit `{step.exit_code}`)",
+                        "",
+                    ]
+                )
+                output = "\n".join(
+                    part for part in (step.stdout, step.stderr) if part
+                )
+                lines.extend(_markdown_code(output or "(no captured output)"))
     return "\n".join(lines) + "\n"
 
 

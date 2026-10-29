@@ -905,9 +905,7 @@ def evaluate_suite_command(
                 if case.result and result.mode == "repair"
                 else "-"
             )
-            error = case.error or (
-                case.result.repair_error if case.result else None
-            )
+            error = case.failure_summary
             table.add_row(
                 case.relative_root,
                 manifest.language if manifest else "unknown",
@@ -918,6 +916,14 @@ def evaluate_suite_command(
                 error or "",
             )
         console.print(table)
+        failed_cases = [case for case in result.cases if not case.passed]
+        if failed_cases:
+            console.print("[red]Failed case details:[/red]")
+            for case in failed_cases:
+                console.print(
+                    f"- [bold]{case.relative_root}[/bold]: "
+                    f"{case.failure_summary or 'unknown evaluation failure'}"
+                )
         metrics = result.metrics
         console.print(
             f"Suite result: {metrics['passed']}/{metrics['total']} passed "

@@ -4,6 +4,8 @@
 
 ### Added
 
+- repair 套件逐用例 JSON 在 `evaluation.repair_details` 内嵌完整结构化证据，包括 proposal、静态拒绝、失败 diagnosis、真实 diff、构建步骤和输出；无需在 fixture 下创建中间 repair 报告。
+- repair 套件 Markdown 为失败用例展开逐轮证据，diff/输出展示限制为 4000 字符，完整内容保留在 JSON。
 - `autofix evaluate-suite --repair --model MODEL` 逐用例执行隔离模型修复，不写回 fixture；支持本机 runner 和全套件共享镜像的 Docker runner。
 - 新增 `autofix-evaluation-suite` schema v2，记录 AutoFix 版本、模型、runner、尝试上限、首次通过率、平均尝试数、静态拒绝率、验证失败率、越界修改率与缺失必改文件率；baseline 继续输出 v1。
 - repair 异常携带内存态结构化结果，使 `--no-save` 下仍能准确统计静态拒绝和验证失败，无需依赖中间审计文件。
@@ -38,12 +40,13 @@
 
 ### Verified
 
-- Windows 本机 225 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、workflow YAML 和 JSON schema 检查通过。
+- Windows 本机 226 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、workflow YAML 和 JSON schema 检查通过。
 - 隔离 PEP 517 wheel 构建通过，并确认 `autofix/repository.py`、`autofix/agent/artifacts.py` 与 `autofix/evaluation_suite.py` 已包含在生成包中。
 - 使用 `qwen2.5-coder:7b` 在独立 Git 仓库完成失败复现、detached-worktree 预览、plan v4 重放、指定 patch 输出和显式本地 commit 闭环；最终 commit 只包含目标源码并保留 diff trailer。
 
 ### Fixed
 
+- `evaluate-suite --repair` 对“候选安全应用但验证失败”的用例不再显示空白 `Error`；终端表格后新增不会被列宽截断的完整失败摘要。
 - detached Git worktree 因 `core.autocrlf` 使用 CRLF、而调用方原文件仍为 LF 时，隔离结果现在会在生成 report/patch/plan 和写回前规范化到原文件换行风格，避免安全的 diff SHA-256 校验错误拒绝同一方案。
 - Windows 临时工作区在 8.3 短路径（如 `RUNNER~1`）与长路径混用时，源码上下文收集不再因纯词法 `relative_to()` 比较而失败；收集入口现在统一规范化项目根路径，并保留解析后路径的项目边界检查。
 - 新增非规范根路径与已解析构建输出路径混用的回归测试，覆盖 GitHub 托管 Windows runner 暴露的路径身份问题；同时验证构建输出引用的项目外源码仍不会被收集。

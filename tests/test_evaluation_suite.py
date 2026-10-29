@@ -375,6 +375,11 @@ def test_repair_suite_keeps_rejection_metrics_when_reports_are_disabled(
     assert result.metrics["verification_failures"] == 0
     assert result.cases[0].result is not None
     assert "No safe repair proposal" in (result.cases[0].result.repair_error or "")
+    case_payload = result.to_dict()["cases"][0]
+    assert "No safe repair proposal" in case_payload["error"]
+    assert case_payload["evaluation"]["repair_details"]["rejections"][0][
+        "reason"
+    ]
 
 
 def test_repair_suite_counts_applicable_candidates_that_fail_verification(
@@ -388,7 +393,6 @@ def test_repair_suite_counts_applicable_candidates_that_fail_verification(
         client=FailingVerificationClient(),
         model="failing-model",
         max_attempts=1,
-        save_report=False,
     )
 
     assert not result.passed
@@ -397,6 +401,25 @@ def test_repair_suite_counts_applicable_candidates_that_fail_verification(
     assert result.metrics["verification_failures"] == 1
     assert result.metrics["verification_failure_rate"] == 1.0
     assert (case / "calculator.py").read_bytes() == original
+    payload = result.to_dict()["cases"][0]
+    assert "failed verification" in payload["error"]
+    details = payload["evaluation"]["repair_details"]
+    failure = details["verification_failures"][0]
+    assert failure["diagnosis"] == "The candidate intentionally chooses the wrong operator."
+    assert "return left * right" in failure["changes"][0]["diff"]
+    assert failure["build"]["exit_code"] == 1
+    assert result.json_report_path is not None
+    saved = json.loads(result.json_report_path.read_text(encoding="utf-8"))
+    assert saved["cases"][0]["evaluation"]["repair_details"][
+        "verification_failures"
+    ][0]["changes"][0]["diff"] == failure["changes"][0]["diff"]
+    assert result.markdown_report_path is not None
+    markdown = result.markdown_report_path.read_text(encoding="utf-8")
+    assert "Failed repair evidence" in markdown
+    assert "return left * right" in markdown
+    assert "verification failure" in markdown
+    assert not (case / ".autofix" / "repairs").exists()
+    assert not (case / ".autofix" / "evaluations").exists()
 
 
 def test_repair_suite_does_not_call_model_for_mismatched_failure_contract(
@@ -473,3 +496,29 @@ def test_evaluate_suite_cli_repair_uses_selected_model(
     assert payload["model"] == "fixed-model"
     assert payload["autofix_version"]
     assert payload["metrics"]["first_attempt_pass_rate"] == 1.0
+
+
+def test_evaluate_suite_cli_explains_verification_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _repair_case(tmp_path / "repair", "repair")
+    monkeypatch.setattr(
+        "autofix.cli.OllamaClient", lambda _url: FailingVerificationClient()
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "evaluate-suite",
+            str(tmp_path),
+            "--repair",
+            "--model",
+            "failing-model",
+            "--max-attempts",
+            "1",
+            "--no-save",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "passed static checks but failed verification" in result.stdout

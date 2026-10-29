@@ -262,6 +262,8 @@ flowchart LR
 
 单个用例的解析或执行失败只改变该用例状态，不中断其余用例；重复 `case.name` 会把所有冲突项标记为失败。只有根目录无清单、repair 缺少模型或聚合报告无法发布才属于套件级错误。`autofix-evaluation-suite` v1 固定为 `mode=baseline`；v2 固定为 `mode=repair` 并记录 AutoFix 版本、模型、runner、尝试上限和候选质量指标。失败异常携带内存态 `RepairResult`，因此 `--no-save` 不依赖读取临时 repair JSON 也能聚合拒绝和验证失败。
 
+v2 case 的外层字段保持稳定，失败摘要复用已有 `error`；完整证据放入开放的 `evaluation.repair_details`，所以增强诊断不需要改变 v2 顶层 schema。终端通过 `EvaluationSuiteCase.failure_summary` 区分契约不匹配、环境/模型错误、静态拒绝、验证失败和范围失败。JSON 不截断；Markdown 只截断超长展示片段，避免单份编译日志淹没整套报告。
+
 ## 4. 配置系统
 
 `config.py` 定义不可变的 `AutoFixConfig`：

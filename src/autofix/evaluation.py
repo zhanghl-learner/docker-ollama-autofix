@@ -79,6 +79,10 @@ class EvaluationResult:
     repair_error: str | None = None
     repair_report_path: Path | None = None
     report_path: Path | None = None
+    # In-memory evidence lets aggregate callers retain rejected attempts even
+    # when report persistence is disabled. It is intentionally serialized only
+    # by the suite layer, which already owns its versioned output contract.
+    repair_evidence: RepairResult | None = None
 
     @property
     def initial_failure_confirmed(self) -> bool:
@@ -507,6 +511,9 @@ def evaluate_project(
                 runner=runner_name,
                 repair_error=str(exc),
                 repair_report_path=repair_report_path,
+                repair_evidence=repair_result
+                if isinstance(repair_result, RepairResult)
+                else None,
             )
             if save_report:
                 result = replace(

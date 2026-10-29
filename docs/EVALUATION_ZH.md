@@ -158,6 +158,17 @@ autofix evaluate-suite examples\complex-validation `
 
 分母为 0 时比例固定为 `0.0`，同时保留原始计数，使用者不能把 0% 误读为已经发生过成功评测。模型连接/协议失败、环境门禁和无安全候选仍作为失败用例保留；`--no-save` 只禁止落盘，不会清空静态拒绝与验证失败的内存统计。
 
+### 6.1 失败证据与报告层级
+
+repair 用例失败不一定存在异常：候选可能通过全部静态门禁，却没有修复行为测试。此时终端 `Error` 不能留空。套件会生成一条稳定摘要，例如“3 proposals passed static checks but failed verification；最后失败步骤及退出码”，并在表格后用 `Failed case details` 完整输出，避免 Rich 表格宽度截断关键信息。
+
+保存的证据分为两层：
+
+- `suite.json` 与 `cases/*.json`：`evaluation.repair_details` 保存完整 `RepairResult`，包括 proposal 元数据、静态拒绝、每轮 diagnosis、实际 unified diff、完整 `BuildResult` 和 stdout/stderr；
+- `suite.md`：为每个失败 repair 展开尝试编号、原因、diff、失败步骤和输出；单个 diff 或输出超过 4000 字符时截断，并提示查看 JSON。
+
+这些证据直接来自内存中的隔离修复结果。`evaluate-suite` 仍以 `save_report=False` 调用单用例评测，所以不会为了取得细节而在每个 fixture 下额外生成 `.autofix/repairs`；最终只原子发布套件目录。静态拒绝与环境错误若已经形成结构化 repair 结果，也通过同一字段保留。原 fixture 源码仍逐字节不变。
+
 后续评测工作按以下顺序推进：
 
 1. [x] 实现一次运行多个清单的 baseline 聚合命令，保留每个原始结果并固定 JSON schema v1；
