@@ -162,6 +162,18 @@ autofix evaluate-suite examples\complex-validation `
 
 repair 用例失败不一定存在异常：候选可能通过全部静态门禁，却没有修复行为测试。此时终端 `Error` 不能留空。套件会生成一条稳定摘要，例如“3 proposals passed static checks but failed verification；最后失败步骤及退出码”，并在表格后用 `Failed case details` 完整输出，避免 Rich 表格宽度截断关键信息。
 
+长时间运行时，CLI 通过结构化 progress event 展示当前状态，而不是猜测子进程输出：
+
+1. `[case/total] ... reproducing`：读取清单并执行故障基线；
+2. `preparing isolation`：创建 detached worktree/临时副本并确认隔离基线；
+3. `attempt N/M, waiting for Ollama`：模型 HTTP 请求进行中，spinner 会持续刷新；
+4. `proposal`：显示 summary、diagnosis 及编辑文件/行号；
+5. `verifying`：候选已通过静态校验，正在运行完整命令矩阵；
+6. `failed verification`、`rejected` 或 `verified successfully`：本轮确定性结果；
+7. 汇总后的 `Verified repair changes`：打印最终被真实构建接受的 unified diff。
+
+`--no-progress` 只关闭中间事件，不改变修复、报告或最终 diff。`--json` 自动关闭所有人类进度和 diff，保证 stdout 可直接交给 JSON 解析器。
+
 保存的证据分为两层：
 
 - `suite.json` 与 `cases/*.json`：`evaluation.repair_details` 保存完整 `RepairResult`，包括 proposal 元数据、静态拒绝、每轮 diagnosis、实际 unified diff、完整 `BuildResult` 和 stdout/stderr；

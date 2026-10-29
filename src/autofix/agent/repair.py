@@ -184,6 +184,22 @@ class RepairResult:
 
 
 @dataclass(frozen=True)
+class RepairProgressEvent:
+    """Observable repair milestone for responsive terminal and API clients."""
+
+    phase: str
+    attempt: int | None = None
+    max_attempts: int | None = None
+    proposal: RepairProposal | None = None
+    changes: tuple[ValidatedChange, ...] = ()
+    build: BuildResult | None = None
+    reason: str | None = None
+
+
+RepairProgressCallback = Callable[[RepairProgressEvent], None]
+
+
+@dataclass(frozen=True)
 class ProposalRejection:
     """Static validation failure returned to the model as retry feedback."""
 
@@ -348,6 +364,7 @@ def repair_project(
     save_report: bool = True,
     patch_output: Path | str | None = None,
     build_runner: Callable[..., BuildResult] = run_build,
+    progress_callback: RepairProgressCallback | None = None,
 ) -> RepairResult:
     """Build, request bounded repairs, validate, rebuild, and optionally write back.
 
@@ -357,6 +374,31 @@ def repair_project(
     """
 
     root = root.resolve()
+
+    def emit(
+        phase: str,
+        *,
+        attempt: int | None = None,
+        proposal: RepairProposal | None = None,
+        changes: tuple[ValidatedChange, ...] = (),
+        build: BuildResult | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Publish progress without coupling repair orchestration to a UI."""
+
+        if progress_callback is not None:
+            progress_callback(
+                RepairProgressEvent(
+                    phase,
+                    attempt,
+                    max_attempts,
+                    proposal,
+                    changes,
+                    build,
+                    reason,
+                )
+            )
+
     try:
         git_status = validate_git_repair_workspace(root)
     except (GitInspectionError, GitWorktreeError) as exc:
@@ -413,7 +455,9 @@ def repair_project(
         return result
 
     try:
+        emit("initial_verification_started")
         initial = run_workspace_build()
+        emit("initial_verification_completed", build=initial)
     except BaseException as exc:
         cleanup_after_error(exc)
         raise
@@ -460,6 +504,7 @@ def repair_project(
                 report_path=_save_repair_report(root, result, error=environment_issue),
             )
         error = RepairEnvironmentError(environment_issue)
+        emit("environment_failure", build=initial, reason=environment_issue)
         setattr(error, "report_path", result.report_path)
         # Keep structured evidence available to callers that intentionally
         # disable filesystem reports, such as aggregate benchmark runs.
@@ -527,6 +572,7 @@ def repair_project(
     try:
         for attempt in range(1, max_attempts + 1):
             files = collect_source_context(work_root, current)
+            emit("model_waiting", attempt=attempt)
             proposal = client.propose(
                 model=model,
                 failure=format_failure(current),
@@ -535,6 +581,7 @@ def repair_project(
                 allow_test_changes=allow_test_changes,
             )
             proposals.append(proposal)
+            emit("proposal_received", attempt=attempt, proposal=proposal)
             fingerprint = _proposal_fingerprint(proposal)
             if fingerprint in proposal_fingerprints:
                 last_rejection = UnsafePatchError(
@@ -542,6 +589,12 @@ def repair_project(
                 )
                 rejections.append(
                     ProposalRejection(attempt, proposal.summary, str(last_rejection))
+                )
+                emit(
+                    "proposal_rejected",
+                    attempt=attempt,
+                    proposal=proposal,
+                    reason=str(last_rejection),
                 )
                 previous_attempt = _verification_retry_feedback(
                     verification_failures,
@@ -560,6 +613,12 @@ def repair_project(
             except UnsafePatchError as exc:
                 last_rejection = exc
                 rejections.append(ProposalRejection(attempt, proposal.summary, str(exc)))
+                emit(
+                    "proposal_rejected",
+                    attempt=attempt,
+                    proposal=proposal,
+                    reason=str(exc),
+                )
                 edit_details = [
                     {
                         "path": edit.path,
@@ -605,6 +664,12 @@ def repair_project(
                 rejections.append(
                     ProposalRejection(attempt, proposal.summary, str(last_rejection))
                 )
+                emit(
+                    "proposal_rejected",
+                    attempt=attempt,
+                    proposal=proposal,
+                    reason=str(last_rejection),
+                )
                 previous_attempt = _verification_retry_feedback(
                     verification_failures,
                     baseline=initial,
@@ -625,6 +690,12 @@ def repair_project(
                 seen_file_versions[change.relative_path].add(
                     hashlib.sha256(change.replacement.encode("utf-8")).hexdigest()
                 )
+            emit(
+                "verification_started",
+                attempt=attempt,
+                proposal=proposal,
+                changes=changes,
+            )
             current = run_workspace_build()
             if current.succeeded:
                 all_changes.extend(changes)
@@ -677,12 +748,26 @@ def repair_project(
                     rolled_back=False,
                     result_changes=final_changes,
                 )
+                emit(
+                    "repair_succeeded",
+                    attempt=attempt,
+                    proposal=proposal,
+                    changes=final_changes,
+                    build=current,
+                )
                 cleanup()
                 return result
             verification_failures.append(
                 VerificationFailure(
                     attempt, proposal.summary, proposal.diagnosis, changes, current
                 )
+            )
+            emit(
+                "verification_failed",
+                attempt=attempt,
+                proposal=proposal,
+                changes=changes,
+                build=current,
             )
             previous_attempt = _verification_retry_feedback(
                 verification_failures, baseline=initial
@@ -706,6 +791,7 @@ def repair_project(
             f"No safe repair proposal after {max_attempts} attempt(s). Last rejection: {last_rejection}"
         )
         report = finish(applied=False, rolled_back=False, error=str(error))
+        emit("repair_exhausted", reason=str(error))
         setattr(error, "report_path", report.report_path)
         setattr(error, "repair_result", report)
         cleanup()
@@ -720,6 +806,7 @@ def repair_project(
         rolled_back=rolled_back,
         result_changes=() if using_temporary else None,
     )
+    emit("repair_exhausted", build=result.final_build)
     cleanup()
     return result
 

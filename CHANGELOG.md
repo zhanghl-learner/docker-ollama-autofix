@@ -4,6 +4,9 @@
 
 ### Added
 
+- `evaluate-suite` 人类模式默认显示实时 case/attempt 进度；等待 Ollama 和验证期间使用动态 spinner，候选到达后显示 diagnosis、文件、行号与验证结果。
+- 套件汇总后直接打印每个成功 repair 的 summary、diagnosis、修改路径和 verified unified diff；`--no-progress` 可关闭中间事件，`--json` 始终保持纯 JSON。
+- repair 编排器新增可选结构化 `RepairProgressCallback`，套件包装为包含用例序号、路径和耗时的 progress event，UI 观察不会参与修复接受决策。
 - repair 套件逐用例 JSON 在 `evaluation.repair_details` 内嵌完整结构化证据，包括 proposal、静态拒绝、失败 diagnosis、真实 diff、构建步骤和输出；无需在 fixture 下创建中间 repair 报告。
 - repair 套件 Markdown 为失败用例展开逐轮证据，diff/输出展示限制为 4000 字符，完整内容保留在 JSON。
 - `autofix evaluate-suite --repair --model MODEL` 逐用例执行隔离模型修复，不写回 fixture；支持本机 runner 和全套件共享镜像的 Docker runner。
@@ -40,7 +43,7 @@
 
 ### Verified
 
-- Windows 本机 226 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、workflow YAML 和 JSON schema 检查通过。
+- Windows 本机 227 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、实时进度/终端 diff、workflow YAML 和 JSON schema 检查通过。
 - 隔离 PEP 517 wheel 构建通过，并确认 `autofix/repository.py`、`autofix/agent/artifacts.py` 与 `autofix/evaluation_suite.py` 已包含在生成包中。
 - 使用 `qwen2.5-coder:7b` 在独立 Git 仓库完成失败复现、detached-worktree 预览、plan v4 重放、指定 patch 输出和显式本地 commit 闭环；最终 commit 只包含目标源码并保留 diff trailer。
 

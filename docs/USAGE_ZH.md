@@ -344,6 +344,8 @@ autofix evaluate-suite examples\complex-validation `
 
 每个有效用例仍通过 `evaluate_project()` 单独进行故障签名 preflight，并在 detached Git worktree 或非 Git 临时副本中修复；原 fixture 不写回。repair 聚合使用 JSON v2，记录模型、runner、尝试上限、首次通过率、平均尝试数、静态拒绝率、验证失败率、越界修改率和缺失必改文件率。baseline 继续使用兼容的 JSON v1。终端表格后的 `Failed case details` 显示完整失败摘要；逐用例 JSON 的 `evaluation.repair_details` 保存 proposal、静态拒绝和每轮验证失败的 diagnosis、diff、构建步骤与完整输出；Markdown 展开同样证据，但单段 diff/输出最多展示 4000 字符，完整内容以 JSON 为准。`--docker` 模式要求所有用例共享一个明确的 `--docker-image` 或套件级配置镜像；当前不会为混合语言用例自动切换多个镜像。
 
+人类可读模式默认启用实时进度：每个用例开始时显示基线复现；等待 Ollama 和运行验证期间保持动态 spinner；收到 proposal 后显示 summary、diagnosis、目标文件、起始行和替换行数；静态拒绝或验证失败立即输出原因。全部结束后，`Verified repair changes` 会直接打印每个成功用例最终通过验证的 unified diff。自动化不需要动态输出时使用 `--no-progress`；`--json` 会强制静默进度，只在 stdout 输出一个合法 JSON 文档。
+
 0.19.0 起，每个模型候选必须包含可审计的 `diagnosis`。候选通过静态校验但构建失败时，AutoFix 保存本轮 diff、构建输出和新增失败测试，然后把工作区恢复到初始故障状态；下一轮从干净源码重新修复，而不是叠加在错误修改上。完全重复的编辑和恢复到已验证失败状态的循环会被拒绝。CLI 的 `verification failures` 表示“能够应用但未通过构建”的候选数量，它与静态 `rejections` 是不同指标。
 
 | 命令 | 用途 | 是否改源码 |
@@ -364,6 +366,7 @@ autofix evaluate-suite examples\complex-validation `
 | `autofix ci-check . --output ci-result.json` | CI 无交互验证与稳定 JSON/退出码 | 否 |
 | `autofix evaluate-suite PATH` | 批量执行评测故障基线并保存聚合证据 | 否 |
 | `autofix evaluate-suite PATH --repair --model MODEL` | 隔离执行批量模型修复并聚合计分 | 否 |
+| `autofix evaluate-suite PATH --repair --no-progress ...` | 关闭 spinner 和中间里程碑，仍保留最终人类报告 | 否 |
 | `autofix history .` | 查看修复历史 | 否 |
 | `autofix undo .` | 撤销最近一次尚未撤销的成功修复 | 是；先备份当前版本 |
 | `autofix rollback REPORT --project .` | 按指定报告撤销 | 是；先备份当前版本 |

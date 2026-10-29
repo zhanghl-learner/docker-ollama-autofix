@@ -14,7 +14,7 @@ from time import monotonic
 from typing import Any, Callable
 
 from autofix import __version__
-from autofix.agent.repair import RepairClient, RepairResult
+from autofix.agent.repair import RepairClient, RepairProgressEvent, RepairResult
 from autofix.builders import BuildResult, run_build
 from autofix.evaluation import (
     EvaluationError,
@@ -43,6 +43,23 @@ _IGNORED_DIRECTORIES = {
 
 class EvaluationSuiteError(ValueError):
     """Raised when a suite root or aggregate output is unusable."""
+
+
+@dataclass(frozen=True)
+class EvaluationSuiteProgressEvent:
+    """One case-level or repair-level milestone in a sequential suite run."""
+
+    phase: str
+    case_root: Path
+    relative_root: str
+    case_index: int
+    case_total: int
+    duration_seconds: float = 0.0
+    status: str | None = None
+    repair: RepairProgressEvent | None = None
+
+
+EvaluationSuiteProgressCallback = Callable[[EvaluationSuiteProgressEvent], None]
 
 
 @dataclass(frozen=True)
@@ -514,6 +531,7 @@ def evaluate_suite(
     max_attempts: int = 3,
     build_runner: Callable[..., BuildResult] = run_build,
     runner_name: str = "local",
+    progress_callback: EvaluationSuiteProgressCallback | None = None,
 ) -> EvaluationSuiteResult:
     """Run every contract in baseline or isolated repair mode and retain outcomes."""
 
@@ -536,37 +554,77 @@ def evaluate_suite(
     started_at = datetime.now(timezone.utc).isoformat()
     began = monotonic()
     cases: list[EvaluationSuiteCase] = []
-    for case_root in case_roots:
+    case_total = len(case_roots)
+    for case_index, case_root in enumerate(case_roots, start=1):
         relative = case_root.relative_to(suite_root).as_posix() or "."
         manifest_path = case_root / "autofix-eval.yml"
         case_began = monotonic()
+        if progress_callback is not None:
+            progress_callback(
+                EvaluationSuiteProgressEvent(
+                    "case_started",
+                    case_root,
+                    relative,
+                    case_index,
+                    case_total,
+                )
+            )
+
+        def emit_case_completed(case: EvaluationSuiteCase) -> None:
+            if progress_callback is not None:
+                progress_callback(
+                    EvaluationSuiteProgressEvent(
+                        "case_completed",
+                        case_root,
+                        relative,
+                        case_index,
+                        case_total,
+                        case.duration_seconds,
+                        case.status,
+                    )
+                )
+
+        def forward_repair(event: RepairProgressEvent) -> None:
+            if progress_callback is not None:
+                progress_callback(
+                    EvaluationSuiteProgressEvent(
+                        "repair_progress",
+                        case_root,
+                        relative,
+                        case_index,
+                        case_total,
+                        round(monotonic() - case_began, 3),
+                        repair=event,
+                    )
+                )
+
         try:
             digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
         except OSError as exc:
-            cases.append(
-                EvaluationSuiteCase(
-                    case_root,
-                    relative,
-                    "",
-                    round(monotonic() - case_began, 3),
-                    error_kind="invalid_manifest",
-                    error=f"{type(exc).__name__}: {exc}",
-                )
+            case = EvaluationSuiteCase(
+                case_root,
+                relative,
+                "",
+                round(monotonic() - case_began, 3),
+                error_kind="invalid_manifest",
+                error=f"{type(exc).__name__}: {exc}",
             )
+            cases.append(case)
+            emit_case_completed(case)
             continue
         try:
             manifest = load_evaluation_manifest(case_root)
         except (EvaluationError, OSError, UnicodeError) as exc:
-            cases.append(
-                EvaluationSuiteCase(
-                    case_root,
-                    relative,
-                    digest,
-                    round(monotonic() - case_began, 3),
-                    error_kind="invalid_manifest",
-                    error=f"{type(exc).__name__}: {exc}",
-                )
+            case = EvaluationSuiteCase(
+                case_root,
+                relative,
+                digest,
+                round(monotonic() - case_began, 3),
+                error_kind="invalid_manifest",
+                error=f"{type(exc).__name__}: {exc}",
             )
+            cases.append(case)
+            emit_case_completed(case)
             continue
         try:
             evaluation = evaluate_project(
@@ -579,6 +637,7 @@ def evaluate_suite(
                 build_runner=build_runner,
                 runner_name=runner_name,
                 save_report=False,
+                progress_callback=forward_repair if client is not None else None,
             )
             case = EvaluationSuiteCase(
                 case_root,
@@ -597,6 +656,7 @@ def evaluate_suite(
                 error=f"{type(exc).__name__}: {exc}",
             )
         cases.append(case)
+        emit_case_completed(case)
     names: dict[str, list[int]] = {}
     for index, case in enumerate(cases):
         if case.result is not None:

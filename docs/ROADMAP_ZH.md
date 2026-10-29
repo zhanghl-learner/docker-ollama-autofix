@@ -182,6 +182,8 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 
 第八切片完善失败可解释性：终端不再把普通验证失败显示为空 `Error`，逐用例 JSON 内嵌完整 repair 证据，Markdown 展开 diagnosis、diff、失败步骤和有界输出。证据来自内存结果，不在 fixture 下额外产生单用例报告；baseline v1 和 repair v2 外层字段保持兼容。
 
+第九切片完善长任务交互：repair 状态机新增只读 progress event，套件附加用例序号，CLI 默认用 spinner 和持久里程碑展示模型等待、候选诊断、编辑位置与验证结果；汇总后直接输出成功修复的 verified diff。`--no-progress` 可关闭中间输出，`--json` 保持严格纯 JSON。
+
 ## 8. 文档维护规则
 
 以后每轮迭代至少检查：

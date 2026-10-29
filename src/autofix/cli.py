@@ -6,9 +6,12 @@ import hashlib
 import json
 import shlex
 from pathlib import Path
+from time import monotonic
 
 import typer
 from rich.console import Console
+from rich.status import Status
+from rich.syntax import Syntax
 from rich.table import Table
 
 from autofix import __version__
@@ -44,7 +47,11 @@ from autofix.evaluation import (
     evaluate_project,
     load_evaluation_manifest,
 )
-from autofix.evaluation_suite import EvaluationSuiteError, evaluate_suite
+from autofix.evaluation_suite import (
+    EvaluationSuiteError,
+    EvaluationSuiteProgressEvent,
+    evaluate_suite,
+)
 from autofix.models import BuildStep, ProjectInspection
 from autofix.repository import (
     GitCommitError,
@@ -80,6 +87,141 @@ app = typer.Typer(
 bundle_app = typer.Typer(help="Create, verify, and install offline runtime bundles.")
 app.add_typer(bundle_app, name="bundle")
 console = Console()
+
+
+class _SuiteProgressRenderer:
+    """Render long-running suite milestones while keeping a live wait spinner."""
+
+    def __init__(self) -> None:
+        self.status: Status = console.status("Preparing evaluation suite...", spinner="dots")
+        self.active = False
+        self.case_started_at: dict[str, float] = {}
+
+    def start_wait(self, message: str) -> None:
+        """Start or update the animated status shown during blocking work."""
+
+        self.status.update(message)
+        if not self.active:
+            self.status.start()
+            self.active = True
+
+    def stop_wait(self) -> None:
+        """Stop the live status before emitting persistent terminal lines."""
+
+        if self.active:
+            self.status.stop()
+            self.active = False
+
+    def close(self) -> None:
+        """Guarantee that no spinner remains active after completion or failure."""
+
+        self.stop_wait()
+
+    def __call__(self, event: EvaluationSuiteProgressEvent) -> None:
+        prefix = f"[{event.case_index}/{event.case_total}] {event.relative_root}"
+        if event.phase == "case_started":
+            self.stop_wait()
+            self.case_started_at[event.relative_root] = monotonic()
+            console.print(f"\n[cyan]{prefix}: reproducing the declared failure...[/cyan]")
+            self.start_wait(f"[cyan]{prefix}: running baseline verification...[/cyan]")
+            return
+        if event.phase == "case_completed":
+            self.stop_wait()
+            color = "green" if event.status == "passed" else "red"
+            console.print(
+                f"[{color}]{prefix}: {event.status} in "
+                f"{event.duration_seconds:.3f}s[/{color}]"
+            )
+            return
+        repair = event.repair
+        if event.phase != "repair_progress" or repair is None:
+            return
+        elapsed = event.duration_seconds
+        if repair.phase == "initial_verification_started":
+            self.start_wait(
+                f"[cyan]{prefix}: preparing isolation and confirming baseline "
+                f"({elapsed:.1f}s)...[/cyan]"
+            )
+        elif repair.phase == "model_waiting":
+            self.start_wait(
+                f"[yellow]{prefix}: attempt {repair.attempt}/{repair.max_attempts}, "
+                f"waiting for Ollama ({elapsed:.1f}s)...[/yellow]"
+            )
+        elif repair.phase == "proposal_received":
+            self.stop_wait()
+            proposal = repair.proposal
+            if proposal is not None:
+                console.print(
+                    f"[yellow]{prefix}: attempt {repair.attempt} proposal — "
+                    f"{proposal.summary}[/yellow]"
+                )
+                if proposal.diagnosis:
+                    console.print(f"  Diagnosis: {proposal.diagnosis}")
+                for edit in proposal.edits:
+                    console.print(
+                        f"  Edit: {edit.path}:{edit.start_line} "
+                        f"(replace {edit.delete_lines} line(s)) — {edit.reason}"
+                    )
+                for change in proposal.changes:
+                    console.print(f"  Replace: {change.path} — {change.reason}")
+        elif repair.phase == "proposal_rejected":
+            self.stop_wait()
+            console.print(
+                f"[red]{prefix}: attempt {repair.attempt} rejected — "
+                f"{repair.reason}[/red]"
+            )
+        elif repair.phase == "verification_started":
+            paths = ", ".join(change.relative_path for change in repair.changes)
+            self.start_wait(
+                f"[blue]{prefix}: attempt {repair.attempt}, verifying "
+                f"{paths or 'candidate changes'} ({elapsed:.1f}s)...[/blue]"
+            )
+        elif repair.phase == "verification_failed":
+            self.stop_wait()
+            step = repair.build.steps[-1] if repair.build and repair.build.steps else None
+            detail = (
+                f"{step.label} exited {step.exit_code}" if step else "build failed"
+            )
+            console.print(
+                f"[red]{prefix}: attempt {repair.attempt} failed verification — "
+                f"{detail}[/red]"
+            )
+        elif repair.phase == "repair_succeeded":
+            self.stop_wait()
+            paths = ", ".join(change.relative_path for change in repair.changes)
+            console.print(
+                f"[green]{prefix}: attempt {repair.attempt} verified successfully — "
+                f"{paths or 'no persisted changes'}[/green]"
+            )
+        elif repair.phase in {"environment_failure", "repair_exhausted"}:
+            self.stop_wait()
+            console.print(f"[red]{prefix}: {repair.reason or repair.phase}[/red]")
+
+
+def _print_verified_suite_changes(result: object) -> None:
+    """Print verified source diffs after the aggregate table for human review."""
+
+    cases = getattr(result, "cases", ())
+    verified = [
+        case
+        for case in cases
+        if case.passed and case.result is not None and case.result.repair is not None
+    ]
+    if not verified:
+        return
+    console.print("\n[bold green]Verified repair changes:[/bold green]")
+    for case in verified:
+        repair = case.result.repair
+        assert repair is not None
+        proposal = repair.proposals[-1] if repair.proposals else None
+        console.print(f"\n[bold]{case.relative_root}[/bold]")
+        if proposal is not None:
+            console.print(f"Summary: {proposal.summary}")
+            if proposal.diagnosis:
+                console.print(f"Diagnosis: {proposal.diagnosis}")
+        for change in repair.changes:
+            console.print(f"Changed: [cyan]{change.relative_path}[/cyan] — {change.reason}")
+            console.print(Syntax(change.diff, "diff", word_wrap=False))
 
 
 def _json(data: object) -> None:
@@ -832,6 +974,11 @@ def evaluate_suite_command(
         False, "--no-save", help="Do not save aggregate or per-case reports."
     ),
     json_output: bool = typer.Option(False, "--json", help="Print aggregate JSON."),
+    progress: bool = typer.Option(
+        True,
+        "--progress/--no-progress",
+        help="Show live case, model, proposal, and verification milestones.",
+    ),
     docker: bool = typer.Option(False, "--docker", help="Run verification in Docker."),
     docker_image: str | None = typer.Option(
         None, help="Image shared by every suite case; required if not configured."
@@ -874,16 +1021,26 @@ def evaluate_suite_command(
                 )
 
         selected_model = model or (config.ollama_model if config else None)
-        result = evaluate_suite(
-            path,
-            timeout_seconds=timeout,
-            save_report=not no_save,
-            client=OllamaClient(ollama_url) if repair_mode else None,
-            model=selected_model,
-            max_attempts=max_attempts,
-            build_runner=build_runner,
-            runner_name="docker" if docker else "local",
+        progress_renderer = (
+            _SuiteProgressRenderer() if progress and not json_output else None
         )
+        if progress_renderer is not None:
+            progress_renderer.start_wait("Discovering evaluation cases...")
+        try:
+            result = evaluate_suite(
+                path,
+                timeout_seconds=timeout,
+                save_report=not no_save,
+                client=OllamaClient(ollama_url) if repair_mode else None,
+                model=selected_model,
+                max_attempts=max_attempts,
+                build_runner=build_runner,
+                runner_name="docker" if docker else "local",
+                progress_callback=progress_renderer,
+            )
+        finally:
+            if progress_renderer is not None:
+                progress_renderer.close()
     except (DockerConfigurationError, EvaluationSuiteError) as exc:
         console.print(f"[red]Evaluation suite stopped: {exc}[/red]")
         raise typer.Exit(code=2) from exc
@@ -937,6 +1094,7 @@ def evaluate_suite_command(
                 f"static rejection {metrics['static_rejection_rate']:.2%}, "
                 f"verification failure {metrics['verification_failure_rate']:.2%}"
             )
+            _print_verified_suite_changes(result)
         if result.json_report_path:
             console.print(f"Suite JSON: {result.json_report_path}")
         if result.markdown_report_path:

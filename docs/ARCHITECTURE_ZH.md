@@ -264,6 +264,29 @@ flowchart LR
 
 v2 case 的外层字段保持稳定，失败摘要复用已有 `error`；完整证据放入开放的 `evaluation.repair_details`，所以增强诊断不需要改变 v2 顶层 schema。终端通过 `EvaluationSuiteCase.failure_summary` 区分契约不匹配、环境/模型错误、静态拒绝、验证失败和范围失败。JSON 不截断；Markdown 只截断超长展示片段，避免单份编译日志淹没整套报告。
 
+修复状态机通过可选 `RepairProgressCallback` 发出 `initial_verification_*`、`model_waiting`、`proposal_received/rejected`、`verification_started/failed`、`repair_succeeded/exhausted` 等不可变事件；回调只观察已有状态，不参与接受决策。套件将其包装为带用例序号和相对路径的 `EvaluationSuiteProgressEvent`。CLI renderer 在阻塞的模型请求和构建期间维护 Rich spinner，在状态边界停止 spinner 并写入持久终端行。`--json` 不注册 renderer，因此机器输出不会混入日志。
+
+```mermaid
+sequenceDiagram
+    participant CLI
+    participant Suite
+    participant Repair
+    participant Ollama
+    participant Build
+    CLI->>Suite: evaluate_suite(progress_callback)
+    Suite-->>CLI: case_started
+    Suite->>Repair: evaluate_project / repair_project
+    Repair-->>CLI: model_waiting
+    Repair->>Ollama: propose
+    Ollama-->>Repair: diagnosis + edits
+    Repair-->>CLI: proposal_received
+    Repair-->>CLI: verification_started
+    Repair->>Build: complete command matrix
+    Build-->>Repair: BuildResult
+    Repair-->>CLI: verification_failed / repair_succeeded
+    Suite-->>CLI: case_completed
+```
+
 ## 4. 配置系统
 
 `config.py` 定义不可变的 `AutoFixConfig`：

@@ -18,6 +18,8 @@ from autofix.agent.plans import (
 from autofix.agent.patches import UnsafePatchError
 from autofix.agent.repair import (
     ProposalRejection,
+    RepairProgressCallback,
+    RepairProgressEvent,
     RepairResult,
     VerificationFailure,
     repair_project,
@@ -40,6 +42,8 @@ __all__ = [
     "PlanProvenance",
     "RepairPlan",
     "RepairProposal",
+    "RepairProgressCallback",
+    "RepairProgressEvent",
     "RepairEnvironmentError",
     "RepairArtifactError",
     "RepairResult",

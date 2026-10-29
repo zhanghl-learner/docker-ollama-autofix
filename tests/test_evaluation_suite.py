@@ -10,6 +10,7 @@ from autofix.agent.ollama import FileEdit, RepairProposal
 from autofix.cli import app
 from autofix.evaluation_suite import (
     EvaluationSuiteError,
+    EvaluationSuiteProgressEvent,
     discover_evaluation_cases,
     evaluate_suite,
 )
@@ -320,12 +321,14 @@ def test_repair_suite_scores_first_attempts_without_mutating_cases(
     originals = {
         path: (path / "calculator.py").read_bytes() for path in (first, second)
     }
+    events: list[EvaluationSuiteProgressEvent] = []
 
     result = evaluate_suite(
         tmp_path,
         client=FixedRepairClient(),
         model="fixed-model",
         max_attempts=3,
+        progress_callback=events.append,
     )
 
     assert result.passed
@@ -348,6 +351,17 @@ def test_repair_suite_scores_first_attempts_without_mutating_cases(
     aggregate = json.loads(result.json_report_path.read_text(encoding="utf-8"))
     assert aggregate["version"] == 2
     assert aggregate["metrics"]["first_attempt_pass_rate"] == 1.0
+    phases = [
+        event.repair.phase
+        for event in events
+        if event.repair is not None
+    ]
+    assert "model_waiting" in phases
+    assert "proposal_received" in phases
+    assert "verification_started" in phases
+    assert "repair_succeeded" in phases
+    assert [event.phase for event in events].count("case_started") == 2
+    assert [event.phase for event in events].count("case_completed") == 2
     assert all(
         (path / "calculator.py").read_bytes() == content
         for path, content in originals.items()
@@ -522,3 +536,48 @@ def test_evaluate_suite_cli_explains_verification_failure(
 
     assert result.exit_code == 1
     assert "passed static checks but failed verification" in result.stdout
+
+
+def test_evaluate_suite_cli_shows_progress_and_verified_diff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _repair_case(tmp_path / "repair", "repair")
+    monkeypatch.setattr(
+        "autofix.cli.OllamaClient", lambda _url: FixedRepairClient()
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "evaluate-suite",
+            str(tmp_path),
+            "--repair",
+            "--model",
+            "fixed-model",
+            "--no-save",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "attempt 1 proposal" in result.stdout
+    assert "verified successfully" in result.stdout
+    assert "Verified repair changes" in result.stdout
+    assert "calculator.py" in result.stdout
+    assert "return left + right" in result.stdout
+
+    quiet = runner.invoke(
+        app,
+        [
+            "evaluate-suite",
+            str(tmp_path),
+            "--repair",
+            "--model",
+            "fixed-model",
+            "--no-progress",
+            "--no-save",
+        ],
+    )
+
+    assert quiet.exit_code == 0
+    assert "attempt 1 proposal" not in quiet.stdout
+    assert "Verified repair changes" in quiet.stdout

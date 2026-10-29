@@ -14,7 +14,12 @@ import yaml
 from autofix.agent.diagnostics import RepairEnvironmentError
 from autofix.agent.ollama import OllamaError
 from autofix.agent.patches import UnsafePatchError
-from autofix.agent.repair import RepairClient, RepairResult, repair_project
+from autofix.agent.repair import (
+    RepairClient,
+    RepairProgressCallback,
+    RepairResult,
+    repair_project,
+)
 from autofix.builders import BuildResult, parse_command, run_build
 from autofix.models import BuildStep
 
@@ -395,6 +400,7 @@ def evaluate_project(
     build_runner: Callable[..., BuildResult] = run_build,
     runner_name: str = "local",
     save_report: bool = True,
+    progress_callback: RepairProgressCallback | None = None,
 ) -> EvaluationResult:
     """Validate a failing baseline and optionally score a non-mutating repair."""
 
@@ -459,6 +465,7 @@ def evaluate_project(
                 isolate=True,
                 save_report=save_report,
                 build_runner=build_runner,
+                progress_callback=progress_callback,
             )
         except (UnsafePatchError, RepairEnvironmentError, OllamaError) as exc:
             # A rejected or unavailable model is an observed benchmark result,
