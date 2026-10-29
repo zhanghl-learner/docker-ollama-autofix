@@ -297,10 +297,17 @@ def _verification_retry_feedback(
             for change in item.changes
         )
         new_failures = sorted(failed_checks(item.build) - baseline_checks)
+        persistent_failures = sorted(failed_checks(item.build) & baseline_checks)
         regression = (
             "\nNEWLY FAILING CHECKS CAUSED BY THIS DIFF: " + ", ".join(new_failures)
             if new_failures
             else ""
+        )
+        persistent = (
+            "\nORIGINAL FAILING CHECKS STILL PRESENT: "
+            + ", ".join(persistent_failures)
+            if persistent_failures
+            else "\nTHE ORIGINALLY FAILING VERIFICATION STEP STILL FAILS."
         )
         sections.append(
             f"ATTEMPT {item.attempt}: {item.summary}\n"
@@ -309,7 +316,11 @@ def _verification_retry_feedback(
             "APPLIED DIFF:\n"
             f"{diff}\n"
             "VERIFICATION FAILURE AFTER THAT DIFF:\n"
-            f"{failure}{regression}"
+            f"{failure}{persistent}{regression}\n"
+            "CONTROL-FLOW CONSISTENCY AUDIT: The applied diff is disproven. "
+            "Check whether the failing input can reach every edited statement and "
+            "whether corrected_code actually changes the branch outcome described "
+            "by MODEL DIAGNOSIS."
         )
     history = "\n\n".join(sections)
     # Current numbered files are sent separately and remain the source of truth
@@ -321,9 +332,17 @@ def _verification_retry_feedback(
         if latest_rejection
         else ""
     )
+    duplicate_warning = (
+        "\nDUPLICATE RECOVERY REQUIREMENT: The last response repeated an earlier "
+        "edit byte-for-byte. It will always be rejected. Use different edit "
+        "coordinates or different corrected_code that changes the causal branch; "
+        "do not return the same predicate or an equivalent expression.\n"
+        if latest_rejection and "Duplicate proposal" in latest_rejection
+        else ""
+    )
     return (
         "Earlier proposals passed static validation but did not pass verification.\n"
-        f"{history}{rejection}\n"
+        f"{history}{rejection}{duplicate_warning}\n"
         "Do not repeat, reverse, or cosmetically rewrite an earlier failed change. "
         "An edit limited to a previously failed location is invalid unless it also "
         "changes a different causal condition. If a diff introduced a newly failing "
@@ -331,7 +350,10 @@ def _verification_retry_feedback(
         "Compare all observed outcomes with the current numbered source. Trace "
         "whether each failing boundary input reaches the edited statement, then "
         "repair the causal condition, control flow, or operation with a different "
-        "minimal edit."
+        "minimal edit. If diagnosis says an input is excluded by a guard, edit the "
+        "guard or an earlier reachable condition; changing only statements inside "
+        "that unreachable branch cannot fix the excluded input. Never add an inner "
+        "conditional whose predicate is already guaranteed by the enclosing branch."
     )
 
 

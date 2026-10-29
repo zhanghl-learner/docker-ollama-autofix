@@ -95,6 +95,8 @@ def test_model_schema_excludes_protected_test_paths(monkeypatch: pytest.MonkeyPa
     assert path_schema["enum"] == ["calculator.py"]  # type: ignore[index]
     prompt = captured["messages"][1]["content"]  # type: ignore[index]
     assert "READ-ONLY TEST: test_calculator.py" in prompt
+    assert "guard excludes the failing input" in prompt
+    assert "inner conditional whose predicate is already guaranteed" in prompt
     assert captured["options"] == {"temperature": 0}
 
     OllamaClient().propose(
@@ -108,3 +110,15 @@ def test_model_schema_excludes_protected_test_paths(monkeypatch: pytest.MonkeyPa
         "PROJECT FILES"
     )
     assert captured["options"] == {"temperature": 0.15}
+
+    OllamaClient().propose(
+        model="test",
+        failure="assertion failed",
+        files={"calculator.py": "value = 1\n"},
+        previous_attempt=(
+            "DUPLICATE RECOVERY REQUIREMENT: repeated an earlier edit byte-for-byte"
+        ),
+    )
+    duplicate_retry_prompt = captured["messages"][1]["content"]  # type: ignore[index]
+    assert "equivalent nested condition" in duplicate_retry_prompt
+    assert captured["options"] == {"temperature": 0.25}

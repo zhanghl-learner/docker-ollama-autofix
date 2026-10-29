@@ -348,6 +348,8 @@ autofix evaluate-suite examples\complex-validation `
 
 0.19.0 起，每个模型候选必须包含可审计的 `diagnosis`。候选通过静态校验但构建失败时，AutoFix 保存本轮 diff、构建输出和新增失败测试，然后把工作区恢复到初始故障状态；下一轮从干净源码重新修复，而不是叠加在错误修改上。完全重复的编辑和恢复到已验证失败状态的循环会被拒绝。CLI 的 `verification failures` 表示“能够应用但未通过构建”的候选数量，它与静态 `rejections` 是不同指标。
 
+当原失败在候选验证后仍存在，重试上下文会明确标注 persistent failure，并要求模型检查失败输入是否能到达被编辑语句。若 diagnosis 指出某个 guard 排除了边界输入，提示要求修改 guard 或更早的可达控制流，而不是在不可达分支内再嵌套同一条件。完全重复候选仍计入模型请求上限；下一轮会收到 `DUPLICATE RECOVERY REQUIREMENT`，并把重试温度从 0.15 有限提高到 0.25，以尝试离开已证伪答案。所有新候选仍必须通过相同静态门禁和完整验证矩阵。
+
 | 命令 | 用途 | 是否改源码 |
 | --- | --- | --- |
 | `autofix doctor` | 检查 Python、Git、Docker、Ollama 与 Ollama API | 否 |

@@ -4,6 +4,8 @@
 
 ### Added
 
+- 验证失败重试上下文新增 persistent original failures、new failures 与 diagnosis→控制流→diff 一致性审计，要求确认失败输入能够到达被编辑语句。
+- 字节级重复候选触发 `DUPLICATE RECOVERY REQUIREMENT`，明确要求改变编辑坐标或 corrected code；后续一次请求使用受控 0.25 温度尝试离开已证伪答案。
 - `evaluate-suite` 人类模式默认显示实时 case/attempt 进度；等待 Ollama 和验证期间使用动态 spinner，候选到达后显示 diagnosis、文件、行号与验证结果。
 - 套件汇总后直接打印每个成功 repair 的 summary、diagnosis、修改路径和 verified unified diff；`--no-progress` 可关闭中间事件，`--json` 始终保持纯 JSON。
 - repair 编排器新增可选结构化 `RepairProgressCallback`，套件包装为包含用例序号、路径和耗时的 progress event，UI 观察不会参与修复接受决策。
@@ -27,6 +29,10 @@
 - 成功 repair/apply-plan 输出可移植 unified patch、patch 原始字节 SHA-256，并支持 `--patch-output` 写入 CI 指定的新文件。
 - `repair --apply --commit` 与 `apply-plan --commit` 支持创建只包含验证文件的本地 commit，并写入 `AutoFix-Diff-SHA256` trailer。
 
+### Changed
+
+- 模型提示新增通用可达性规则：若 guard 排除失败输入，应修改 guard 或更早控制流；禁止在 predicate 已由外层分支保证时添加等价内层条件。
+
 ### Safety
 
 - 脏 Git 仓库和尚无 commit 的仓库在构建、Ollama 请求和源码修改前停止；AutoFix 不自动 stash、clean、commit、push 或 merge，只有显式 `--commit` 才能在验证后创建本地提交。
@@ -43,7 +49,7 @@
 
 ### Verified
 
-- Windows 本机 227 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、实时进度/终端 diff、workflow YAML 和 JSON schema 检查通过。
+- Windows 本机 228 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、实时进度/终端 diff、语义重试、workflow YAML 和 JSON schema 检查通过。
 - 隔离 PEP 517 wheel 构建通过，并确认 `autofix/repository.py`、`autofix/agent/artifacts.py` 与 `autofix/evaluation_suite.py` 已包含在生成包中。
 - 使用 `qwen2.5-coder:7b` 在独立 Git 仓库完成失败复现、detached-worktree 预览、plan v4 重放、指定 patch 输出和显式本地 commit 闭环；最终 commit 只包含目标源码并保留 diff trailer。
 

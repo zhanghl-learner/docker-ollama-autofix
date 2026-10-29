@@ -214,6 +214,8 @@ flowchart TD
 
 首轮温度为 0，保证可重复；有失败证据的重试使用 0.15，帮助模型离开已证伪的局部答案。随机性不能绕过任何安全边界：JSON Schema、精确旧文本、路径限制、破坏性检查和真实构建仍全部执行。模型协议要求 `diagnosis` 只报告因果文件、编号行和分支事实，不要求也不保存隐藏推理过程。
 
+重复恢复是一个更窄的第三档：若上次候选与更早编辑的 fingerprint 完全相同，反馈加入 `DUPLICATE RECOVERY REQUIREMENT`，指出相同坐标/替换必然再次被拒绝，并将下一次温度设为 0.25。验证失败反馈同时区分 persistent original failures 与 newly failing checks，并要求执行 diagnosis→可达性→实际 diff 的一致性审计。该机制只改变下一次模型输入和采样，不改变候选接受条件，也不会为重复候选重复运行构建。
+
 ### 3.1 CI 契约边界
 
 `ci.py` 不实现新的构建器，也不调用模型。`ci-check` 复用项目检测、Git 只读状态、`run_build`/`run_build_docker` 和环境错误分类，再把结果映射到固定 envelope：

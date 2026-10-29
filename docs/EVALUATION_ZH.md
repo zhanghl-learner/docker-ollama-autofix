@@ -174,6 +174,18 @@ repair 用例失败不一定存在异常：候选可能通过全部静态门禁�
 
 `--no-progress` 只关闭中间事件，不改变修复、报告或最终 diff。`--json` 自动关闭所有人类进度和 diff，保证 stdout 可直接交给 JSON 解析器。
 
+### 6.2 diagnosis 与实际编辑一致性
+
+小模型可能正确描述“边界输入被 guard 排除”，却只修改 guard 内部的语句，导致失败输入仍无法到达修改位置。AutoFix 不尝试用不可靠的静态规则宣称两个任意程序语义等价，而是让真实测试先证伪候选，再生成更强的通用反馈：
+
+- 标记原失败检查是否仍然存在，以及候选是否引入新失败；
+- 同时提供 diagnosis、实际 diff、失败输出和编辑位置；
+- 要求重新模拟失败输入的分支可达性，并核对 corrected code 是否真的实现 diagnosis；
+- 明确拒绝在已保证相同 predicate 的外层分支中增加等价内层条件；
+- 完全重复 proposal 不重新构建，并在下一次请求中要求改变坐标或 corrected code。
+
+首轮仍使用温度 0；普通验证失败后的重试为 0.15；检测到字节级重复后为 0.25。温度只影响候选探索，不能绕过 schema、路径、旧文本、破坏性检查、测试保护或完整构建。即便增强反馈，模型仍可能失败；这种失败应保留为评测结果，而不是自动接受未经验证的“看起来合理”修复。
+
 保存的证据分为两层：
 
 - `suite.json` 与 `cases/*.json`：`evaluation.repair_details` 保存完整 `RepairResult`，包括 proposal 元数据、静态拒绝、每轮 diagnosis、实际 unified diff、完整 `BuildResult` 和 stdout/stderr；

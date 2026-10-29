@@ -150,6 +150,9 @@ Treat test assertions as the required behavior. When actual and expected values 
 trace the referenced function into a non-test source file and correct its implementation.
 When one exact boundary input fails but a neighboring input passes, inspect the comparison
 operator or branch reachability before changing code inside an already-correct branch.
+If a guard excludes the failing input, edit that guard or earlier reachable control flow.
+Do not add an inner conditional whose predicate is already guaranteed by an enclosing branch;
+such an edit cannot change behavior for inputs that never enter the outer branch.
 Never hard-code a literal that only satisfies the displayed test input; preserve the
 function parameters and repair the general operation. Copy leading whitespace exactly,
 including tabs, from the numbered source line into incorrect_code and corrected_code.
@@ -164,6 +167,9 @@ must not overlap. Make the smallest edit possible.
 Before responding, verify that every corrected_code differs from incorrect_code and that the
 actual edit implements the stated summary and reason; a correct explanation with
 an unchanged edit is invalid.
+On retries, the supplied APPLIED DIFF has already failed real verification. Do not return the
+same edit, an equivalent nested condition, or a cosmetic rewrite. Re-simulate the failing input
+and choose corrected_code that changes the causal branch outcome.
 Before choosing edits, simulate the failing input through relevant conditions. Put a concise,
 auditable explanation in diagnosis: name the causal production file and numbered line,
 state the observed branch result, the required branch result, and why the proposed edit
@@ -184,6 +190,11 @@ PROJECT FILES:
 {file_sections}
 {retry_note}
 """
+        retry_temperature = 0
+        if previous_attempt:
+            retry_temperature = (
+                0.25 if "DUPLICATE RECOVERY REQUIREMENT" in previous_attempt else 0.15
+            )
         payload = {
             "model": model,
             "messages": [
@@ -201,7 +212,7 @@ PROJECT FILES:
             # A first attempt is deterministic. A low retry temperature helps
             # capable models leave an already disproven local optimum while all
             # output remains bounded by schema, patch validation, and rebuilding.
-            "options": {"temperature": 0.15 if previous_attempt else 0},
+            "options": {"temperature": retry_temperature},
         }
         try:
             response = httpx.post(f"{self.base_url}/api/chat", json=payload, timeout=self.timeout)

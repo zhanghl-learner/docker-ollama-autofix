@@ -96,6 +96,10 @@ def test_preview_retries_failed_build_and_returns_only_verified_final_diff(
     assert "-value = 1" in feedback
     assert "+value = 3" in feedback
     assert "did not pass verification" in feedback
+    assert "THE ORIGINALLY FAILING VERIFICATION STEP STILL FAILS" in feedback
+    assert "CONTROL-FLOW CONSISTENCY AUDIT" in feedback
+    assert "failing input can reach every edited statement" in feedback
+    assert "inner conditional whose predicate is already guaranteed" in feedback
     assert len(result.changes) == 1
     assert result.changes[0].original.replace("\r\n", "\n") == "value = 1\n"
     assert result.changes[0].replacement.replace("\r\n", "\n") == "value = 2\n"
@@ -137,6 +141,30 @@ def test_exact_duplicate_proposal_is_rejected_with_audit_report(
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert len(report["verification_failures"]) == 1
     assert "Duplicate proposal" in report["rejections"][0]["reason"]
+
+
+def test_duplicate_retry_requires_a_different_causal_edit(tmp_path: Path) -> None:
+    source, steps = _project(tmp_path)
+    wrong = RepairProposal(
+        "wrong", (FileChange("value.py", "value = 3\n", "guess"),)
+    )
+    fixed = RepairProposal(
+        "fix", (FileChange("value.py", "value = 2\n", "correct"),)
+    )
+    client = SequenceClient([wrong, wrong, fixed])
+
+    result = repair_project(
+        tmp_path, steps, client, model="test", apply=False, max_attempts=3
+    )
+
+    assert result.succeeded
+    assert len(result.verification_failures) == 1
+    assert len(result.rejections) == 1
+    feedback = str(client.calls[2]["previous_attempt"])
+    assert "DUPLICATE RECOVERY REQUIREMENT" in feedback
+    assert "repeated an earlier edit byte-for-byte" in feedback
+    assert "different corrected_code" in feedback
+    assert source.read_text(encoding="utf-8") == "value = 1\n"
 
 
 def test_repair_cycle_is_rejected_before_rebuilding_repeated_state(
