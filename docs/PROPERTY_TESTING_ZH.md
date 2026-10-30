@@ -100,4 +100,39 @@ autofix property-promote .\my-project\.autofix\property-checks\REPORT.json `
 git apply --check ".\.autofix\property-patches\PATCH.patch"
 ```
 
-是否真正应用、提交仍由开发者决定。这样生成模型、差分验证和持久测试写入保持三个独立权限阶段。
+是否真正应用、提交仍由开发者决定。这样生成模型、差分验证和持久测试写入保持独立权限阶段。
+
+## 7. 显式应用并闭环验证
+
+先把 plan 中已经审核的生产代码修复应用并提交，确保 Git 工作区干净。然后预览晋升元数据和即将执行的验证矩阵：
+
+```powershell
+autofix property-apply .\my-project\.autofix\property-patches\PROMOTION.json `
+  --project .\my-project
+```
+
+预览不会创建测试文件。确认目标、候选 SHA-256、当前 HEAD 和验证命令后，显式应用：
+
+```powershell
+autofix property-apply .\my-project\.autofix\property-patches\PROMOTION.json `
+  --project .\my-project `
+  --apply
+```
+
+应用前会重新检查：Git 仓库已有 HEAD 且干净；promotion、报告、候选、plan 和 patch 的路径及摘要未漂移；plan 中每个生产文件的当前内容与审核后的 replacement 逐字一致；目标测试尚不存在。应用后先单独运行新属性回归，再运行 plan 原验证矩阵。只有全部通过才保留测试文件；任一步失败或发生异常都会删除本轮新建文件，并尽可能移除本轮创建的空目录。
+
+默认回执保存到 `.autofix/property-applies/`，`--json` 输出遵循 [`autofix-property-apply` v1 Schema](../schemas/autofix-property-apply-v1.schema.json)。回执记录当前 baseline commit、固定 argv、逐步输出、`applied` 和 `rolled_back`，适合作为 CI artifact；`--no-save` 可关闭落盘。命令不会执行 commit、push 或 merge，成功后测试文件保持为待人工审查的 Git 变更。
+
+CI 中可以用 `--output` 指定一个确定且尚不存在的回执路径：
+
+```powershell
+autofix property-apply $env:AUTOFIX_PROMOTION `
+  --project . `
+  --apply `
+  --output "$env:RUNNER_TEMP\property-apply.json" `
+  --json
+```
+
+`--output` 必须与 `--apply` 同用，不能和 `--no-save` 组合。发布过程先在目标目录写完并 `fsync` 临时文件，再原子创建最终硬链接；若最终路径已经存在则拒绝覆盖，同时撤销本轮新增测试。stdout 与回执是同一个 JSON 对象，可由流水线校验 schema 后上传。promotion 仍应来自前置人工审核或受保护流水线输入，CI 示例不会自动生成模型候选，也不会自动提交成功后的测试文件。
+
+退出码规则：preview 或完整验证成功为 0；验证失败沿用验证结果的非零退出码；元数据、Git 状态或安全策略错误为 2。

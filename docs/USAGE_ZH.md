@@ -369,6 +369,9 @@ autofix evaluate-suite examples\complex-validation `
 | `autofix property-check CANDIDATE --project . --plan PLAN --run` | 在原始/修复隔离副本执行差分属性验证 | 否；默认写审计报告 |
 | `autofix property-generate . --plan PLAN --model MODEL` | 本地模型生成待审 Hypothesis 候选 | 仅写 `.autofix/property-candidates/`，不执行 |
 | `autofix property-promote REPORT --project .` | 把确认候选转换为新测试文件审核 patch | 仅写 `.autofix/property-patches/`，不应用 |
+| `autofix property-apply PROMOTION --project .` | 预览晋升元数据、已提交修复和完整验证矩阵 | 否 |
+| `autofix property-apply PROMOTION --project . --apply` | 显式创建并验证新回归测试 | 成功保留测试文件；失败自动删除；不 commit/push |
+| `autofix property-apply PROMOTION --project . --apply --output RESULT.json` | 执行闭环并发布确定路径的 CI 回执 | 拒绝覆盖已有回执；失败仍回滚测试文件 |
 | `autofix init .` | 创建项目配置 | 仅创建配置 |
 | `autofix offline-check .` | 检查断网修复所需资源 | 否 |
 | `autofix run .` | 执行构建/测试并写运行报告 | 否 |
@@ -396,6 +399,7 @@ autofix analyze --help
 autofix property-check --help
 autofix property-generate --help
 autofix property-promote --help
+autofix property-apply --help
 autofix repair --help
 autofix apply-plan --help
 autofix evaluate-suite --help

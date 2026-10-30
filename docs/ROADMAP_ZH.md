@@ -200,6 +200,10 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 
 第十七切片实现 confirmed candidate 晋升：`property-promote` 重新验证报告完整 evidence、候选 SHA、plan diff/provenance、项目身份和新测试目标，输出 Git-compatible new-file patch 与 `applied: false` JSON；拒绝未确认/残缺报告、候选漂移、越界或非测试路径以及覆盖已有文件。命令不写测试树、不自动 apply/commit。下一阶段评估人工确认后的显式 apply 工作流及 CI artifact 集成，仍不允许默认写回。
 
+第十八切片实现显式属性回归落地：`property-apply` 默认只预览，要求干净且已有 HEAD 的 Git 仓库、plan 修复内容逐字匹配当前生产文件，并重新校验 promotion→report→candidate→plan→patch 摘要链。只有 `--apply` 才独占创建新测试，随后执行新属性回归与 plan 原矩阵；失败或异常自动删除本轮文件，成功也不 commit/push。JSON v1 回执可直接作为 CI artifact。下一阶段侧重将该回执纳入 CI 契约示例与跨进程真实闭环，并评估对 JavaScript 属性测试的最小安全协议，不直接泛化模型写入权限。
+
+第十九切片完成 CI 回执与真实进程闭环：`property-apply --output` 将 stdout 同构 JSON 发布到确定的非覆盖路径，完整临时文件经 `fsync` 后原子链接为最终 artifact，参数错误或发布失败保持测试树回滚。回归测试使用真实 Git 仓库、独立 CLI 子进程、真实 pytest 命令和离线 Hypothesis 最小 fixture 跑通两步验证，避免只由注入 runner 证明行为。CI 文档明确 promotion 必须先审核、普通 ci-check 与 property apply schema 分离，成功测试仍不自动提交。下一阶段先评估验证命令在真实工作树执行时的副作用隔离，再决定是否扩展 JavaScript fast-check 候选协议。
+
 ## 8. 文档维护规则
 
 以后每轮迭代至少检查：

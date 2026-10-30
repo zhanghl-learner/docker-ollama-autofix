@@ -79,6 +79,7 @@ from autofix.runtime import (
 from autofix.runtime.tools import find_executable
 from autofix.property_testing import (
     PropertyCheckError,
+    apply_property_promotion,
     check_property_candidate,
     generate_property_candidate,
     promote_property_candidate,
@@ -1017,6 +1018,116 @@ def property_promote_command(
         "was applied.[/yellow]"
     )
     console.print(f'Check with: git apply --check "{result.patch_path}"')
+
+
+@app.command("property-apply")
+def property_apply_command(
+    promotion: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, resolve_path=True
+    ),
+    path: Path = typer.Option(
+        Path("."),
+        "--project",
+        exists=True,
+        file_okay=False,
+        resolve_path=True,
+    ),
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Create and verify the promoted test; preview is the default.",
+    ),
+    timeout: float = typer.Option(
+        300, min=0.1, help="Timeout for each verification step."
+    ),
+    no_save: bool = typer.Option(
+        False, "--no-save", help="Do not save an apply receipt under .autofix."
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        dir_okay=False,
+        resolve_path=True,
+        help="Publish the apply receipt at an exact, non-existing CI artifact path.",
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable JSON."
+    ),
+) -> None:
+    """Explicitly add a promoted test after the reviewed repair is committed."""
+
+    if output is not None and (not apply or no_save):
+        message = "--output requires --apply and cannot be combined with --no-save"
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "schema": "autofix-property-apply-error",
+                        "version": 1,
+                        "error": message,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            console.print(f"[red]Property apply stopped: {message}[/red]")
+        raise typer.Exit(code=2)
+
+    try:
+        result = apply_property_promotion(
+            path,
+            promotion,
+            apply=apply,
+            timeout_seconds=timeout,
+            save_receipt=apply and not no_save,
+            receipt_output=output,
+        )
+    except (OSError, PropertyCheckError) as exc:
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "schema": "autofix-property-apply-error",
+                        "version": 1,
+                        "error": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            console.print(f"[red]Property apply stopped: {exc}[/red]")
+        raise typer.Exit(code=2) from exc
+
+    if json_output:
+        _json(result.to_dict())
+    else:
+        console.print(f"Promotion: [cyan]{result.promotion_path}[/cyan]")
+        console.print(f"Target: [cyan]{result.target_path}[/cyan]")
+        console.print(f"Committed repair baseline: {result.baseline_commit}")
+        console.print("Verification matrix:")
+        for step in result.verification_steps:
+            console.print(f"  - {' '.join(step.argv)}")
+        if not apply:
+            console.print(
+                "[yellow]Preview only. Re-run with --apply to create and verify the new "
+                "test file.[/yellow]"
+            )
+        elif result.applied:
+            console.print(
+                "[green]Promoted regression test created and fully verified.[/green]"
+            )
+            if result.receipt_path:
+                console.print(f"Receipt: {result.receipt_path}")
+            console.print("[cyan]No commit or push was performed.[/cyan]")
+        else:
+            console.print(
+                "[red]Verification failed; the newly created test was removed.[/red]"
+            )
+            if result.receipt_path:
+                console.print(f"Receipt: {result.receipt_path}")
+    if apply and not result.applied:
+        exit_code = result.verification.exit_code if result.verification else 1
+        raise typer.Exit(code=exit_code or 1)
 
 
 @app.command("git-status")

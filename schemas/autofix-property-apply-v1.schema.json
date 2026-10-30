@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zhanghl-learner/docker-ollama-autofix/blob/main/schemas/autofix-property-apply-v1.schema.json",
+  "title": "AutoFix Property Apply v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "version", "root", "promotion_path", "target_path",
+    "candidate_sha256", "baseline_commit", "apply_requested", "applied",
+    "rolled_back", "verification_steps", "verification", "receipt_path"
+  ],
+  "properties": {
+    "schema": {"const": "autofix-property-apply"},
+    "version": {"const": 1},
+    "root": {"type": "string", "minLength": 1},
+    "promotion_path": {"type": "string", "minLength": 1},
+    "target_path": {"type": "string", "pattern": "\\.py$"},
+    "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "baseline_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "apply_requested": {"type": "boolean"},
+    "applied": {"type": "boolean"},
+    "rolled_back": {"type": "boolean"},
+    "verification_steps": {
+      "type": "array", "minItems": 1, "items": {"$ref": "#/$defs/step"}
+    },
+    "verification": {
+      "anyOf": [{"$ref": "#/$defs/build"}, {"type": "null"}]
+    },
+    "receipt_path": {"type": ["string", "null"]}
+  },
+  "$defs": {
+    "step": {
+      "type": "object", "additionalProperties": false,
+      "required": ["label", "argv"],
+      "properties": {
+        "label": {"type": "string", "minLength": 1},
+        "argv": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+      }
+    },
+    "step_result": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "label", "argv", "exit_code", "stdout", "stderr",
+        "duration_seconds", "timed_out", "succeeded"
+      ],
+      "properties": {
+        "label": {"type": "string"},
+        "argv": {"type": "array", "items": {"type": "string"}},
+        "exit_code": {"type": "integer"},
+        "stdout": {"type": "string"},
+        "stderr": {"type": "string"},
+        "duration_seconds": {"type": "number", "minimum": 0},
+        "timed_out": {"type": "boolean"},
+        "succeeded": {"type": "boolean"}
+      }
+    },
+    "build": {
+      "type": "object", "additionalProperties": false,
+      "required": ["root", "started_at", "succeeded", "exit_code", "steps", "report_path"],
+      "properties": {
+        "root": {"type": "string"},
+        "started_at": {"type": "string"},
+        "succeeded": {"type": "boolean"},
+        "exit_code": {"type": "integer"},
+        "steps": {"type": "array", "items": {"$ref": "#/$defs/step_result"}},
+        "report_path": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

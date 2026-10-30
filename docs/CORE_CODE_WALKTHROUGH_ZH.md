@@ -22,7 +22,7 @@ cli.py
 
 项目级静态分析发现位于 `static_analysis.py`。它不属于模型 agent：只读取已知配置，生成固定 `BuildStep` 并报告可用性；真正执行仍复用 `builders/runner.py`。
 
-属性测试候选协议位于 `property_testing.py`。它先审核候选结构，再把候选和 plan 修改分别安装到两个临时副本，复用无 shell runner 形成“原始失败、修复通过、原矩阵通过”的差分证据；不会把候选直接写入项目测试目录。
+属性测试候选协议位于 `property_testing.py`。它先审核候选结构，再把候选和 plan 修改分别安装到两个临时副本，复用无 shell runner 形成“原始失败、修复通过、原矩阵通过”的差分证据。`promote_property_candidate()` 只生成未应用 patch；`apply_property_promotion()` 则要求修复已精确应用并提交，在显式请求后创建新测试、运行完整矩阵并在失败时回滚，始终不 commit/push。
 
 同一模块的 `generate_property_candidate()` 调用 Ollama 的独立候选 schema，只把通过 AST/副作用边界的源码保存为 `.autofix` 审核工件。生成和执行是两个命令，模型没有直接调用 runner 或写项目测试树的能力。
 

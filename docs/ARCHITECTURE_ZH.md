@@ -423,6 +423,8 @@ flowchart TD
 
 `property-promote` 是协议之后的非应用型消费者。它不只读取顶层 verdict，还重新核对完整差分 evidence、报告自身路径和 bytes SHA、候选当前 SHA、项目根以及 plan diff/provenance。目标必须是不存在的测试 `.py` 路径；输出是 `/dev/null → b/tests/...` 的 Git-compatible patch 和 `applied: false` 元数据。函数没有写目标测试文件或调用 Git apply 的路径。
 
+`property-apply` 是独立的显式写入门禁。它要求当前 Git HEAD 已提交且工作区干净，重新验证 promotion 整条摘要链，并逐文件确认 plan 审核后的生产代码已精确存在于当前项目。默认只返回目标与固定验证矩阵；`--apply` 才以独占创建方式写入新测试，依次运行新属性回归和 plan 原矩阵。失败或异常只删除本轮创建的测试及空目录，成功也不 commit/push。`autofix-property-apply` v1 回执把 baseline commit、固定 argv、BuildResult 和回滚状态固定为 CI 可归档证据；显式 `--output` 通过已完整写入并同步的临时文件原子创建最终工件，拒绝覆盖已有路径，回执发布失败也会回滚测试写入。
+
 ## 8. 上下文选择与隐私边界
 
 `collect_source_context_with_metadata()` 先从构建输出提取直接引用文件，再有界遍历这些文件能够解析到的项目内依赖：Python 的 `import/from`、JavaScript/TypeScript 的相对 `import/require`、C/C++ 的引号 `include`。遍历带 visited 集合并最多检查 `max_files × 4` 个节点，因此能经过 `__init__.py` 重导出找到实现，又不会被循环或巨大依赖图拖住。Python 绝对模块若不在项目根目录，还可以通过唯一的模块后缀映射到常见 `src/` 布局；出现两个候选时放弃映射，不任意选择。排序依次考虑直接引用的生产文件、本地导入的生产文件、直接引用的测试、其余导入与项目回退源码。这样即使堆栈只指向测试，也能在文件预算耗尽前把被测实现交给模型。`collect_source_context()` 保留兼容的字典返回值。

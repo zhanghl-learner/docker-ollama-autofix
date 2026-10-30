@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,6 +21,7 @@ from autofix.cli import app
 from autofix.models import BuildStep
 from autofix.property_testing import (
     PropertyCheckError,
+    apply_property_promotion,
     check_property_candidate,
     generate_property_candidate,
     inspect_property_candidate,
@@ -116,6 +119,40 @@ def _confirmed_report(
     )
     assert checked.report_path is not None
     return project, plan, candidate, checked.report_path
+
+
+def _ready_promotion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path]:
+    project, plan, _, report = _confirmed_report(tmp_path, monkeypatch)
+    promotion = promote_property_candidate(project, report)
+    plan_data = json.loads(plan.read_text(encoding="utf-8"))
+    (project / "calculator.py").write_text(
+        plan_data["changes"][0]["content"],
+        encoding="utf-8",
+        newline="",
+    )
+    (project / ".gitignore").write_text(".autofix/\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "autofix@example.invalid"],
+        cwd=project,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "AutoFix Test"],
+        cwd=project,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "add", "calculator.py", ".gitignore"], cwd=project, check=True
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "apply reviewed repair"],
+        cwd=project,
+        check=True,
+    )
+    return project, promotion.metadata_path
 
 
 def test_candidate_requires_hypothesis_given_and_top_level_test(tmp_path: Path) -> None:
@@ -622,3 +659,267 @@ def test_property_promote_cli_json_matches_committed_schema(
     assert schema["properties"]["schema"]["const"] == payload["schema"]
     assert set(schema["required"]) == set(payload)
     assert payload["applied"] is False
+
+
+def test_property_apply_preview_requires_committed_repair_and_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, promotion = _ready_promotion(tmp_path, monkeypatch)
+
+    result = apply_property_promotion(project, promotion)
+
+    assert not result.apply_requested
+    assert not result.applied
+    assert result.verification is None
+    assert not (project / result.target_path).exists()
+    assert result.verification_steps[0].label == "Run promoted property regression"
+
+
+def test_property_apply_creates_test_only_after_full_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, promotion = _ready_promotion(tmp_path, monkeypatch)
+
+    def fake_runner(
+        root: Path, steps: tuple[BuildStep, ...], **_: object
+    ) -> BuildResult:
+        assert len(steps) == 2
+        target = root / steps[0].argv[-2]
+        assert target.is_file()
+        results = tuple(
+            StepResult(step.label, step.argv, 0, "passed\n", "", 0.01)
+            for step in steps
+        )
+        return BuildResult(root, results, "2026-10-30T00:00:00+00:00")
+
+    result = apply_property_promotion(
+        project,
+        promotion,
+        apply=True,
+        build_runner=fake_runner,
+    )
+
+    assert result.applied
+    assert not result.rolled_back
+    assert (project / result.target_path).is_file()
+    assert result.receipt_path is not None and result.receipt_path.is_file()
+    receipt = json.loads(result.receipt_path.read_text(encoding="utf-8"))
+    assert receipt["applied"] is True
+    assert receipt["verification"]["succeeded"] is True
+
+
+def test_property_apply_rolls_back_new_test_when_verification_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, promotion = _ready_promotion(tmp_path, monkeypatch)
+
+    def fake_runner(
+        root: Path, steps: tuple[BuildStep, ...], **_: object
+    ) -> BuildResult:
+        step = steps[0]
+        return _result(root, step, exit_code=1, stderr="regression failed\n")
+
+    result = apply_property_promotion(
+        project,
+        promotion,
+        apply=True,
+        build_runner=fake_runner,
+    )
+
+    assert not result.applied
+    assert result.rolled_back
+    assert not (project / result.target_path).exists()
+    assert result.receipt_path is not None
+    receipt = json.loads(result.receipt_path.read_text(encoding="utf-8"))
+    assert receipt["rolled_back"] is True
+
+
+def test_property_apply_rejects_when_reviewed_repair_is_not_current(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, _, _, report = _confirmed_report(tmp_path, monkeypatch)
+    promotion = promote_property_candidate(project, report)
+    (project / ".gitignore").write_text(".autofix/\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "autofix@example.invalid"],
+        cwd=project,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "AutoFix Test"], cwd=project, check=True
+    )
+    subprocess.run(["git", "add", "calculator.py", ".gitignore"], cwd=project, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "baseline"], cwd=project, check=True)
+
+    with pytest.raises(PropertyCheckError, match="not applied exactly"):
+        apply_property_promotion(project, promotion.metadata_path)
+
+
+def test_property_apply_rejects_dirty_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, promotion = _ready_promotion(tmp_path, monkeypatch)
+    (project / "calculator.py").write_text("dirty\n", encoding="utf-8")
+
+    with pytest.raises(PropertyCheckError, match="clean Git"):
+        apply_property_promotion(project, promotion)
+
+
+def test_property_apply_cli_json_matches_committed_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, promotion = _ready_promotion(tmp_path, monkeypatch)
+
+    result = runner.invoke(
+        app,
+        [
+            "property-apply",
+            str(promotion),
+            "--project",
+            str(project),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    schema_path = (
+        Path(__file__).resolve().parents[1]
+        / "schemas"
+        / "autofix-property-apply-v1.schema.json"
+    )
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    assert schema["properties"]["schema"]["const"] == payload["schema"]
+    assert set(schema["required"]) == set(payload)
+    assert payload["apply_requested"] is False
+
+
+def test_property_apply_publishes_exact_ci_receipt_without_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, promotion = _ready_promotion(tmp_path, monkeypatch)
+    output = tmp_path / "artifacts" / "property-apply.json"
+
+    def fake_runner(
+        root: Path, steps: tuple[BuildStep, ...], **_: object
+    ) -> BuildResult:
+        results = tuple(
+            StepResult(step.label, step.argv, 0, "passed\n", "", 0.01)
+            for step in steps
+        )
+        return BuildResult(root, results, "2026-10-30T00:00:00+00:00")
+
+    result = apply_property_promotion(
+        project,
+        promotion,
+        apply=True,
+        receipt_output=output,
+        build_runner=fake_runner,
+    )
+
+    assert result.receipt_path == output.resolve()
+    assert json.loads(output.read_text(encoding="utf-8")) == result.to_dict()
+
+    (project / result.target_path).unlink()
+    with pytest.raises(PropertyCheckError, match="already exists"):
+        apply_property_promotion(
+            project,
+            promotion,
+            apply=True,
+            receipt_output=output,
+            build_runner=fake_runner,
+        )
+    assert not (project / result.target_path).exists()
+
+
+def test_property_apply_output_requires_explicit_saved_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, promotion = _ready_promotion(tmp_path, monkeypatch)
+    output = tmp_path / "receipt.json"
+
+    result = runner.invoke(
+        app,
+        [
+            "property-apply",
+            str(promotion),
+            "--project",
+            str(project),
+            "--output",
+            str(output),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stdout)
+    assert payload["schema"] == "autofix-property-apply-error"
+    assert "requires --apply" in payload["error"]
+    assert not output.exists()
+
+
+def test_property_apply_real_subprocess_closes_git_and_runner_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, promotion = _ready_promotion(tmp_path, monkeypatch)
+    hypothesis = project / "hypothesis"
+    hypothesis.mkdir()
+    (hypothesis / "__init__.py").write_text(
+        """from . import strategies
+
+def given(_strategy):
+    def decorate(function):
+        def wrapped():
+            return function(-1)
+        wrapped.__name__ = function.__name__
+        return wrapped
+    return decorate
+""",
+        encoding="utf-8",
+    )
+    (hypothesis / "strategies.py").write_text(
+        "def integers():\n    return object()\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "add", "hypothesis"], cwd=project, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "add offline hypothesis fixture"],
+        cwd=project,
+        check=True,
+    )
+    output = tmp_path / "artifacts" / "property-apply.json"
+    environment = os.environ.copy()
+    source_root = str(Path(__file__).resolve().parents[1] / "src")
+    environment["PYTHONPATH"] = os.pathsep.join(
+        part for part in (source_root, environment.get("PYTHONPATH", "")) if part
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "autofix",
+            "property-apply",
+            str(promotion),
+            "--project",
+            str(project),
+            "--apply",
+            "--output",
+            str(output),
+            "--json",
+        ],
+        cwd=project,
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    payload = json.loads(completed.stdout)
+    assert payload["applied"] is True
+    assert payload["verification"]["succeeded"] is True
+    assert len(payload["verification"]["steps"]) == 2
+    assert (project / payload["target_path"]).is_file()
+    assert json.loads(output.read_text(encoding="utf-8")) == payload

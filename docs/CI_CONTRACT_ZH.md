@@ -85,3 +85,30 @@ v1 固定上述十个顶层字段。未进入构建时 `build` 为 `null`；Git 
 ```
 
 该 workflow 只验证并上传证据，不调用 Ollama、不应用 patch、不创建 commit，也不修改远端分支。
+
+## 6. 属性回归应用回执
+
+当 promotion 已经由前置人工审核、生产修复已提交且检出保持干净时，可以在受保护的手动 job 中显式执行：
+
+```yaml
+- name: Apply and verify reviewed property regression
+  shell: pwsh
+  env:
+    AUTOFIX_PROMOTION: ${{ inputs.promotion_path }}
+  run: |
+    autofix property-apply $env:AUTOFIX_PROMOTION `
+      --project . `
+      --apply `
+      --output "${{ runner.temp }}/property-apply.json" `
+      --json
+
+- name: Upload property evidence
+  if: always()
+  uses: actions/upload-artifact@v7
+  with:
+    name: autofix-property-apply
+    path: ${{ runner.temp }}/property-apply.json
+    if-no-files-found: warn
+```
+
+`autofix-property-apply` 与通用 `autofix-ci-result` 是两个独立 schema：前者证明某个已晋升属性测试在固定 Git baseline 上通过新回归和 plan 原矩阵，后者描述普通无交互构建。流水线不应把二者混为同一个状态，也不应在 promotion 未经过审核时自动进入 apply job。`property-apply` 成功后只留下未提交测试文件；后续 commit/PR 仍是独立权限阶段。

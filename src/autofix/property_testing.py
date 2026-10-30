@@ -7,6 +7,7 @@ import difflib
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import shutil
 import sys
@@ -22,6 +23,7 @@ from autofix.agent.plans import RepairPlan, load_repair_plan
 from autofix.agent.textio import read_utf8_exact, write_utf8_exact
 from autofix.builders import BuildResult, run_build
 from autofix.models import BuildStep
+from autofix.repository import GitInspectionError, inspect_git_workspace
 
 
 IGNORED_PARTS = {
@@ -204,6 +206,44 @@ class PropertyPromotionResult:
             "patch_sha256": self.patch_sha256,
             "metadata_path": str(self.metadata_path),
             "applied": False,
+        }
+
+
+@dataclass(frozen=True)
+class PropertyApplyResult:
+    """Preview or verified application of one promoted regression test."""
+
+    root: Path
+    promotion_path: Path
+    target_path: str
+    candidate_sha256: str
+    baseline_commit: str
+    apply_requested: bool
+    applied: bool
+    rolled_back: bool
+    verification_steps: tuple[BuildStep, ...]
+    verification: BuildResult | None = None
+    receipt_path: Path | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema": "autofix-property-apply",
+            "version": 1,
+            "root": str(self.root),
+            "promotion_path": str(self.promotion_path),
+            "target_path": self.target_path,
+            "candidate_sha256": self.candidate_sha256,
+            "baseline_commit": self.baseline_commit,
+            "apply_requested": self.apply_requested,
+            "applied": self.applied,
+            "rolled_back": self.rolled_back,
+            "verification_steps": [
+                step.to_dict() for step in self.verification_steps
+            ],
+            "verification": (
+                self.verification.to_dict() if self.verification else None
+            ),
+            "receipt_path": str(self.receipt_path) if self.receipt_path else None,
         }
 
 
@@ -530,6 +570,256 @@ def promote_property_candidate(
                     pass
         raise PropertyCheckError(f"Unable to write property promotion artifact: {exc}") from exc
     return result
+
+
+def _load_promotion(
+    path: Path, project_root: Path
+) -> tuple[dict[str, Any], PropertyCandidate, tuple[BuildStep, ...]]:
+    if not path.is_file() or path.is_symlink():
+        raise PropertyCheckError("Property promotion metadata must be a regular file")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PropertyCheckError("Property promotion metadata must be valid UTF-8 JSON") from exc
+    required = {
+        "schema",
+        "version",
+        "root",
+        "report_path",
+        "report_sha256",
+        "candidate_sha256",
+        "plan_path",
+        "target_path",
+        "patch_path",
+        "patch_sha256",
+        "metadata_path",
+        "applied",
+    }
+    if (
+        not isinstance(data, dict)
+        or set(data) != required
+        or data.get("schema") != "autofix-property-promotion"
+        or data.get("version") != 1
+        or data.get("applied") is not False
+    ):
+        raise PropertyCheckError("Property promotion metadata has an unsupported structure")
+    try:
+        recorded_root = Path(data["root"]).expanduser().resolve()
+        recorded_metadata = Path(data["metadata_path"]).expanduser().resolve()
+        report_path = Path(data["report_path"]).expanduser().resolve()
+        plan_path = Path(data["plan_path"]).expanduser().resolve()
+        patch_path = Path(data["patch_path"]).expanduser().resolve()
+    except TypeError as exc:
+        raise PropertyCheckError("Property promotion metadata contains invalid paths") from exc
+    if recorded_root != project_root:
+        raise PropertyCheckError("Property promotion belongs to a different project root")
+    if recorded_metadata != path:
+        raise PropertyCheckError("Property promotion path does not match its saved identity")
+    report_data, candidate, report_plan, report_sha256 = _load_confirmed_report(
+        report_path, project_root
+    )
+    if report_sha256 != data["report_sha256"]:
+        raise PropertyCheckError("Confirmed property report changed after promotion")
+    if candidate.sha256 != data["candidate_sha256"]:
+        raise PropertyCheckError("Promoted candidate identity no longer matches")
+    if report_plan != plan_path:
+        raise PropertyCheckError("Promotion and report reference different repair plans")
+    if not patch_path.is_file() or patch_path.is_symlink():
+        raise PropertyCheckError("Promoted property patch is missing or unsafe")
+    patch_bytes = patch_path.read_bytes()
+    if hashlib.sha256(patch_bytes).hexdigest() != data["patch_sha256"]:
+        raise PropertyCheckError("Promoted property patch changed after review")
+    target_path, _ = _promotion_target(
+        project_root, data["target_path"], candidate.sha256
+    )
+    expected_patch = _render_new_test_patch(target_path, candidate.source).encode("utf-8")
+    if patch_bytes != expected_patch:
+        raise PropertyCheckError("Promoted patch does not match the confirmed candidate")
+    try:
+        plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PropertyCheckError("Repair plan is unavailable or malformed") from exc
+    raw_changes = plan_data.get("changes") if isinstance(plan_data, dict) else None
+    verification = plan_data.get("verification") if isinstance(plan_data, dict) else None
+    if not isinstance(raw_changes, list) or not raw_changes:
+        raise PropertyCheckError("Repair plan has no reviewed changes")
+    for change in raw_changes:
+        if (
+            not isinstance(change, dict)
+            or not isinstance(change.get("path"), str)
+            or not isinstance(change.get("content"), str)
+        ):
+            raise PropertyCheckError("Repair plan contains invalid reviewed changes")
+        relative = Path(change["path"])
+        current = (project_root / relative).resolve()
+        try:
+            current.relative_to(project_root)
+        except ValueError as exc:
+            raise PropertyCheckError("Repair plan path escapes the project root") from exc
+        if not current.is_file() or read_utf8_exact(current) != change["content"]:
+            raise PropertyCheckError(
+                f"Reviewed repair is not applied exactly: {relative.as_posix()}"
+            )
+    if not isinstance(verification, dict) or verification.get("runner") != "local":
+        raise PropertyCheckError("Property apply requires a local plan verification policy")
+    raw_steps = verification.get("steps")
+    if not isinstance(raw_steps, list) or not raw_steps:
+        raise PropertyCheckError("Repair plan has no verification steps")
+    steps: list[BuildStep] = []
+    for raw in raw_steps:
+        if (
+            not isinstance(raw, dict)
+            or set(raw) != {"label", "argv"}
+            or not isinstance(raw["label"], str)
+            or not isinstance(raw["argv"], list)
+            or not raw["argv"]
+            or not all(isinstance(item, str) and item for item in raw["argv"])
+        ):
+            raise PropertyCheckError("Repair plan contains invalid verification steps")
+        steps.append(BuildStep(raw["label"], tuple(raw["argv"])))
+    if report_data["plan_diff_sha256"] != plan_data.get("diff_sha256"):
+        raise PropertyCheckError("Property report no longer matches the repair plan diff")
+    property_step = BuildStep(
+        "Run promoted property regression",
+        (sys.executable, "-m", "pytest", target_path, "-q"),
+    )
+    return data, candidate, (property_step, *steps)
+
+
+def apply_property_promotion(
+    root: Path | str,
+    promotion: Path | str,
+    *,
+    apply: bool = False,
+    timeout_seconds: float = 300,
+    save_receipt: bool = True,
+    receipt_output: Path | str | None = None,
+    build_runner: Callable[..., BuildResult] = run_build,
+) -> PropertyApplyResult:
+    """Preview or explicitly add and verify one promoted regression test."""
+
+    project_root = Path(root).expanduser().resolve()
+    promotion_path = Path(promotion).expanduser().resolve()
+    try:
+        git_status = inspect_git_workspace(project_root)
+    except GitInspectionError as exc:
+        raise PropertyCheckError(f"Unable to inspect Git workspace: {exc}") from exc
+    if (
+        not git_status.is_repository
+        or git_status.head_commit is None
+        or not git_status.clean
+    ):
+        raise PropertyCheckError(
+            "Property apply requires a clean Git repository with a committed repair"
+        )
+    data, candidate, steps = _load_promotion(promotion_path, project_root)
+    result = PropertyApplyResult(
+        project_root,
+        promotion_path,
+        data["target_path"],
+        candidate.sha256,
+        git_status.head_commit,
+        apply,
+        False,
+        False,
+        steps,
+    )
+    if not apply:
+        return result
+
+    destination = project_root / data["target_path"]
+    created_directories: list[Path] = []
+    parent = destination.parent
+    while parent != project_root and not parent.exists():
+        created_directories.append(parent)
+        parent = parent.parent
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    created = False
+    try:
+        with destination.open("x", encoding="utf-8", newline="") as stream:
+            stream.write(candidate.source)
+        created = True
+        verification = build_runner(
+            project_root,
+            steps,
+            timeout_seconds=timeout_seconds,
+            save_report=False,
+        )
+        applied = verification.succeeded
+        rolled_back = not applied
+        if rolled_back:
+            destination.unlink()
+            created = False
+            for directory in created_directories:
+                try:
+                    directory.rmdir()
+                except OSError:
+                    break
+        result = replace(
+            result,
+            applied=applied,
+            rolled_back=rolled_back,
+            verification=verification,
+        )
+        if save_receipt or receipt_output is not None:
+            if receipt_output is None:
+                receipt_dir = project_root / ".autofix" / "property-applies"
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+                receipt_path = receipt_dir / f"{stamp}.json"
+            else:
+                receipt_path = Path(receipt_output).expanduser().resolve()
+            result = replace(result, receipt_path=receipt_path)
+            _save_property_apply_receipt(receipt_path, result)
+        return result
+    except Exception:
+        if created:
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                pass
+        for directory in created_directories:
+            try:
+                directory.rmdir()
+            except OSError:
+                break
+        raise
+
+
+def _save_property_apply_receipt(
+    destination: Path, result: PropertyApplyResult
+) -> None:
+    """Publish a complete receipt without overwriting an existing artifact."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        raise PropertyCheckError(f"Property apply receipt already exists: {destination}")
+    payload = json.dumps(result.to_dict(), ensure_ascii=False, indent=2) + "\n"
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            newline="\n",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+            temporary_path = Path(stream.name)
+        os.link(temporary_path, destination)
+        temporary_path.unlink()
+    except OSError as exc:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise PropertyCheckError(
+            f"Unable to publish property apply receipt: {exc}"
+        ) from exc
 
 
 def _copy_ignore(directory: str, names: list[str]) -> set[str]:
