@@ -23,7 +23,12 @@ from autofix.agent.plans import RepairPlan, load_repair_plan
 from autofix.agent.textio import read_utf8_exact, write_utf8_exact
 from autofix.builders import BuildResult, run_build
 from autofix.models import BuildStep
-from autofix.repository import GitInspectionError, inspect_git_workspace
+from autofix.repository import (
+    GitInspectionError,
+    GitWorktreeError,
+    create_detached_worktree,
+    inspect_git_workspace,
+)
 
 
 IGNORED_PARTS = {
@@ -728,6 +733,81 @@ def apply_property_promotion(
         return result
 
     destination = project_root / data["target_path"]
+    try:
+        worktree = create_detached_worktree(git_status)
+    except GitWorktreeError as exc:
+        raise PropertyCheckError(
+            f"Unable to create property verification worktree: {exc}"
+        ) from exc
+    try:
+        isolated_destination = worktree.project_root / data["target_path"]
+        isolated_destination.parent.mkdir(parents=True, exist_ok=True)
+        with isolated_destination.open("x", encoding="utf-8", newline="") as stream:
+            stream.write(candidate.source)
+        verification = build_runner(
+            worktree.project_root,
+            steps,
+            timeout_seconds=timeout_seconds,
+            save_report=False,
+        )
+        verification = replace(verification, root=project_root, report_path=None)
+    except BaseException as exc:
+        try:
+            worktree.close()
+        except GitWorktreeError as cleanup_error:
+            exc.add_note(
+                f"Property verification worktree cleanup also failed: {cleanup_error}"
+            )
+        raise
+    try:
+        worktree.close()
+    except GitWorktreeError as exc:
+        raise PropertyCheckError(
+            f"Unable to clean property verification worktree: {exc}"
+        ) from exc
+
+    result = replace(
+        result,
+        applied=verification.succeeded,
+        rolled_back=not verification.succeeded,
+        verification=verification,
+    )
+    if not verification.succeeded:
+        return _save_property_apply_result(
+            project_root,
+            result,
+            save_receipt=save_receipt,
+            receipt_output=receipt_output,
+        )
+
+    try:
+        current_status = inspect_git_workspace(project_root)
+    except GitInspectionError as exc:
+        raise PropertyCheckError(
+            f"Unable to recheck Git workspace after isolated verification: {exc}"
+        ) from exc
+    if (
+        not current_status.clean
+        or current_status.head_commit != git_status.head_commit
+        or current_status.repository_fingerprint != git_status.repository_fingerprint
+    ):
+        raise PropertyCheckError(
+            "Git workspace changed during isolated property verification; "
+            "the test file was not written"
+        )
+    refreshed_data, refreshed_candidate, refreshed_steps = _load_promotion(
+        promotion_path, project_root
+    )
+    if (
+        refreshed_data["target_path"] != data["target_path"]
+        or refreshed_candidate != candidate
+        or refreshed_steps != steps
+    ):
+        raise PropertyCheckError(
+            "Property promotion changed during isolated verification; "
+            "the test file was not written"
+        )
+
     created_directories: list[Path] = []
     parent = destination.parent
     while parent != project_root and not parent.exists():
@@ -737,40 +817,38 @@ def apply_property_promotion(
     created = False
     try:
         with destination.open("x", encoding="utf-8", newline="") as stream:
-            stream.write(candidate.source)
+            stream.write(refreshed_candidate.source)
         created = True
-        verification = build_runner(
+        try:
+            written_status = inspect_git_workspace(project_root)
+        except GitInspectionError as exc:
+            raise PropertyCheckError(
+                f"Unable to verify the written property test with Git: {exc}"
+            ) from exc
+        prefix = (
+            ""
+            if written_status.project_subpath in {None, "."}
+            else f"{written_status.project_subpath}/"
+        )
+        expected_change = f"{prefix}{data['target_path']}"
+        blocking = written_status.blocking_changes
+        if (
+            written_status.head_commit != git_status.head_commit
+            or written_status.repository_fingerprint != git_status.repository_fingerprint
+            or len(blocking) != 1
+            or not blocking[0].untracked
+            or blocking[0].path != expected_change
+        ):
+            raise PropertyCheckError(
+                "Git changes after property write are not exactly the new test file; "
+                "the test file was removed"
+            )
+        return _save_property_apply_result(
             project_root,
-            steps,
-            timeout_seconds=timeout_seconds,
-            save_report=False,
-        )
-        applied = verification.succeeded
-        rolled_back = not applied
-        if rolled_back:
-            destination.unlink()
-            created = False
-            for directory in created_directories:
-                try:
-                    directory.rmdir()
-                except OSError:
-                    break
-        result = replace(
             result,
-            applied=applied,
-            rolled_back=rolled_back,
-            verification=verification,
+            save_receipt=save_receipt,
+            receipt_output=receipt_output,
         )
-        if save_receipt or receipt_output is not None:
-            if receipt_output is None:
-                receipt_dir = project_root / ".autofix" / "property-applies"
-                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-                receipt_path = receipt_dir / f"{stamp}.json"
-            else:
-                receipt_path = Path(receipt_output).expanduser().resolve()
-            result = replace(result, receipt_path=receipt_path)
-            _save_property_apply_receipt(receipt_path, result)
-        return result
     except Exception:
         if created:
             try:
@@ -783,6 +861,28 @@ def apply_property_promotion(
             except OSError:
                 break
         raise
+
+
+def _save_property_apply_result(
+    project_root: Path,
+    result: PropertyApplyResult,
+    *,
+    save_receipt: bool,
+    receipt_output: Path | str | None,
+) -> PropertyApplyResult:
+    """Optionally publish an apply result at its default or requested path."""
+
+    if not save_receipt and receipt_output is None:
+        return result
+    if receipt_output is None:
+        receipt_dir = project_root / ".autofix" / "property-applies"
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        receipt_path = receipt_dir / f"{stamp}.json"
+    else:
+        receipt_path = Path(receipt_output).expanduser().resolve()
+    result = replace(result, receipt_path=receipt_path)
+    _save_property_apply_receipt(receipt_path, result)
+    return result
 
 
 def _save_property_apply_receipt(
@@ -857,6 +957,12 @@ def _failure_signature(evidence: PropertyRunEvidence) -> str | None:
     output = f"{evidence.exit_code}\n{evidence.stdout}\n{evidence.stderr}"
     output = re.sub(r"\bin \d+(?:\.\d+)?s\b", "in <duration>", output)
     output = re.sub(r"\b\d+(?:\.\d+)?s\b", "<duration>", output)
+    output = re.sub(
+        r"\bduration_ms(?::|\s)+\d+(?:\.\d+)?\b",
+        "duration_ms: <duration>",
+        output,
+    )
+    output = re.sub(r"\(\d+(?:\.\d+)?ms\)", "(<duration>)", output)
     return hashlib.sha256(output.encode("utf-8")).hexdigest()
 
 

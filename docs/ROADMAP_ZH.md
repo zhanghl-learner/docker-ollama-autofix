@@ -204,6 +204,10 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 
 第十九切片完成 CI 回执与真实进程闭环：`property-apply --output` 将 stdout 同构 JSON 发布到确定的非覆盖路径，完整临时文件经 `fsync` 后原子链接为最终 artifact，参数错误或发布失败保持测试树回滚。回归测试使用真实 Git 仓库、独立 CLI 子进程、真实 pytest 命令和离线 Hypothesis 最小 fixture 跑通两步验证，避免只由注入 runner 证明行为。CI 文档明确 promotion 必须先审核、普通 ci-check 与 property apply schema 分离，成功测试仍不自动提交。下一阶段先评估验证命令在真实工作树执行时的副作用隔离，再决定是否扩展 JavaScript fast-check 候选协议。
 
+第二十切片把 property apply 验证迁入 detached worktree：候选测试、属性回归、plan 原矩阵及其全部构建副作用只发生在临时检出。清理成功后重新验证原仓库 HEAD/指纹/clean 状态和 promotion 证据才写回；写回后的 Git blocking changes 必须精确等于一个未跟踪目标测试，因 ignore 隐藏或并发额外修改均删除目标并停止。测试覆盖隔离副作用、并发用户文件、ignored 目标和 worktree 注册项清理。下一阶段可以基于同一隔离原语评估 JavaScript/fast-check，但必须先定义依赖可用性与候选静态边界。
+
+第二十一切片实现 JavaScript/fast-check 最小差分协议：候选必须显式绑定 fast-check 与 node:test，并经过 64 KiB、具名 test、property/assert 和副作用能力门禁；执行只接受 package.json 已声明且本机安装的 fast-check，复制经过无符号链接、10,000 文件、64 MiB 限制的 dependencies 闭包，不运行包管理器或联网。Node baseline/fixed 双副本要求两次稳定失败、两次修复通过及 plan 原矩阵通过，JSON v1 独立于 Python schema。当前不开放模型生成、promotion 或写回；下一阶段先通过更多真实 fast-check 版本和嵌套依赖 fixture 验证兼容性，再决定是否增加 JavaScript 晋升协议。
+
 ## 8. 文档维护规则
 
 以后每轮迭代至少检查：

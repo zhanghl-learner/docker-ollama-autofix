@@ -423,7 +423,9 @@ flowchart TD
 
 `property-promote` 是协议之后的非应用型消费者。它不只读取顶层 verdict，还重新核对完整差分 evidence、报告自身路径和 bytes SHA、候选当前 SHA、项目根以及 plan diff/provenance。目标必须是不存在的测试 `.py` 路径；输出是 `/dev/null → b/tests/...` 的 Git-compatible patch 和 `applied: false` 元数据。函数没有写目标测试文件或调用 Git apply 的路径。
 
-`property-apply` 是独立的显式写入门禁。它要求当前 Git HEAD 已提交且工作区干净，重新验证 promotion 整条摘要链，并逐文件确认 plan 审核后的生产代码已精确存在于当前项目。默认只返回目标与固定验证矩阵；`--apply` 才以独占创建方式写入新测试，依次运行新属性回归和 plan 原矩阵。失败或异常只删除本轮创建的测试及空目录，成功也不 commit/push。`autofix-property-apply` v1 回执把 baseline commit、固定 argv、BuildResult 和回滚状态固定为 CI 可归档证据；显式 `--output` 通过已完整写入并同步的临时文件原子创建最终工件，拒绝覆盖已有路径，回执发布失败也会回滚测试写入。
+`property-apply` 是独立的显式写入门禁。它要求当前 Git HEAD 已提交且工作区干净，重新验证 promotion 整条摘要链，并逐文件确认 plan 审核后的生产代码已精确存在于当前项目。默认只返回目标与固定验证矩阵；`--apply` 从同一 HEAD 创建 detached worktree，在其中写候选并依次运行新属性回归和 plan 原矩阵。隔离空间成功清理后再次检查原仓库 HEAD、指纹、clean 状态和 promotion bytes，才独占创建真实测试；写回后的 blocking changes 必须恰好是这个 untracked 目标，忽略规则隐藏或并发额外修改都会触发删除。成功也不 commit/push。`autofix-property-apply` v1 回执把 baseline commit、固定 argv、BuildResult 和回滚状态固定为 CI 可归档证据；显式 `--output` 通过已完整写入并同步的临时文件原子创建最终工件，拒绝覆盖已有路径，回执发布失败也会回滚测试写入。
+
+`javascript_property.py` 复用同一差分 evidence 和 plan 门禁，但保持独立 schema 与无写回权限。静态层要求 `fc`/`test` 分别绑定 fast-check/node:test，并拒绝常见系统、网络、动态执行能力；依赖层只接受 `package.json` 已声明且本地安装的 fast-check，递归校验其普通 dependencies、符号链接、文件数和字节上限，再把最小闭包复制到 baseline/fixed 临时项目。执行固定使用 Node 内置 test runner 的无子进程隔离模式。该路径不调用包管理器、模型、promotion 或 property apply。
 
 ## 8. 上下文选择与隐私边界
 

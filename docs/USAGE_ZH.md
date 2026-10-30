@@ -370,8 +370,10 @@ autofix evaluate-suite examples\complex-validation `
 | `autofix property-generate . --plan PLAN --model MODEL` | 本地模型生成待审 Hypothesis 候选 | 仅写 `.autofix/property-candidates/`，不执行 |
 | `autofix property-promote REPORT --project .` | 把确认候选转换为新测试文件审核 patch | 仅写 `.autofix/property-patches/`，不应用 |
 | `autofix property-apply PROMOTION --project .` | 预览晋升元数据、已提交修复和完整验证矩阵 | 否 |
-| `autofix property-apply PROMOTION --project . --apply` | 显式创建并验证新回归测试 | 成功保留测试文件；失败自动删除；不 commit/push |
+| `autofix property-apply PROMOTION --project . --apply` | 在 detached worktree 验证新回归测试，再安全写回 | 原工作树验证期间不受构建副作用影响；不 commit/push |
 | `autofix property-apply PROMOTION --project . --apply --output RESULT.json` | 执行闭环并发布确定路径的 CI 回执 | 拒绝覆盖已有回执；失败仍回滚测试文件 |
+| `autofix property-js-check CANDIDATE --project . --plan PLAN` | 静态预览 JavaScript/fast-check 候选 | 否 |
+| `autofix property-js-check CANDIDATE --project . --plan PLAN --run` | 在 baseline/fixed 临时副本差分执行 fast-check | 不安装依赖、不写原项目 |
 | `autofix init .` | 创建项目配置 | 仅创建配置 |
 | `autofix offline-check .` | 检查断网修复所需资源 | 否 |
 | `autofix run .` | 执行构建/测试并写运行报告 | 否 |
@@ -400,6 +402,7 @@ autofix property-check --help
 autofix property-generate --help
 autofix property-promote --help
 autofix property-apply --help
+autofix property-js-check --help
 autofix repair --help
 autofix apply-plan --help
 autofix evaluate-suite --help
@@ -410,6 +413,7 @@ autofix bundle --help
 静态分析的声明规则、JSON v1 契约、退出状态以及如何通过 `--step` 加入 repair 验收矩阵，见[静态分析使用与安全边界](STATIC_ANALYSIS_ZH.md)。
 
 属性测试候选的 preview、双版本验证、verdict 和 JSON v1 契约，见[属性测试候选协议](PROPERTY_TESTING_ZH.md)。
+JavaScript/fast-check 的声明式离线依赖闭包和差分边界，见[JavaScript 属性候选协议](JAVASCRIPT_PROPERTY_TESTING_ZH.md)。
 
 ### CI 无交互验证
 

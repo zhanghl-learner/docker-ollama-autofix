@@ -119,7 +119,11 @@ autofix property-apply .\my-project\.autofix\property-patches\PROMOTION.json `
   --apply
 ```
 
-应用前会重新检查：Git 仓库已有 HEAD 且干净；promotion、报告、候选、plan 和 patch 的路径及摘要未漂移；plan 中每个生产文件的当前内容与审核后的 replacement 逐字一致；目标测试尚不存在。应用后先单独运行新属性回归，再运行 plan 原验证矩阵。只有全部通过才保留测试文件；任一步失败或发生异常都会删除本轮新建文件，并尽可能移除本轮创建的空目录。
+应用前会重新检查：Git 仓库已有 HEAD 且干净；promotion、报告、候选、plan 和 patch 的路径及摘要未漂移；plan 中每个生产文件的当前内容与审核后的 replacement 逐字一致；目标测试尚不存在。
+
+执行模式从当前 HEAD 创建 detached worktree，在隔离项目中写入候选，先单独运行新属性回归，再运行 plan 原验证矩阵。构建产生的缓存、临时文件或意外源码改动随 worktree 定向清理，不进入原项目。只有全部通过且 worktree 已成功移除，AutoFix 才重新检查原仓库的 HEAD、仓库指纹、干净状态和整条 promotion 证据；随后独占创建真实测试文件。写回后 Git 必须只报告这个未跟踪测试，若目标被 `.gitignore` 隐藏、出现并发修改或任何额外变化，测试会立即删除并拒绝完成。
+
+因此验证失败时原项目从未创建测试文件；验证异常或隔离清理失败也不会进入写回阶段。成功后只留下一个可见的未跟踪测试文件，供人工 review/commit。
 
 默认回执保存到 `.autofix/property-applies/`，`--json` 输出遵循 [`autofix-property-apply` v1 Schema](../schemas/autofix-property-apply-v1.schema.json)。回执记录当前 baseline commit、固定 argv、逐步输出、`applied` 和 `rolled_back`，适合作为 CI artifact；`--no-save` 可关闭落盘。命令不会执行 commit、push 或 merge，成功后测试文件保持为待人工审查的 Git 变更。
 

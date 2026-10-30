@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zhanghl-learner/docker-ollama-autofix/blob/main/schemas/autofix-javascript-property-check-v1.schema.json",
+  "title": "AutoFix JavaScript Property Check v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "version", "root", "plan_path", "plan_diff_sha256",
+    "candidate", "command", "run_requested", "verdict", "passed",
+    "baseline_runs", "fixed_runs", "fixed_verification", "report_path"
+  ],
+  "properties": {
+    "schema": {"const": "autofix-javascript-property-check"},
+    "version": {"const": 1},
+    "root": {"type": "string", "minLength": 1},
+    "plan_path": {"type": "string", "minLength": 1},
+    "plan_diff_sha256": {"type": ["string", "null"]},
+    "candidate": {"$ref": "#/$defs/candidate"},
+    "command": {"$ref": "#/$defs/step"},
+    "run_requested": {"type": "boolean"},
+    "verdict": {
+      "enum": [
+        "preview", "counterexample-confirmed", "baseline-not-failing",
+        "baseline-unstable", "fixed-candidate-failed",
+        "fixed-verification-failed"
+      ]
+    },
+    "passed": {"type": "boolean"},
+    "baseline_runs": {"type": "array", "items": {"$ref": "#/$defs/run"}},
+    "fixed_runs": {"type": "array", "items": {"$ref": "#/$defs/run"}},
+    "fixed_verification": {"type": "array", "items": {"$ref": "#/$defs/run"}},
+    "report_path": {"type": ["string", "null"]}
+  },
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path", "sha256", "size_bytes", "framework", "test_names",
+        "target_path"
+      ],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "size_bytes": {"type": "integer", "minimum": 1, "maximum": 65536},
+        "framework": {"const": "fast-check"},
+        "test_names": {
+          "type": "array", "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "target_path": {
+          "type": "string",
+          "pattern": "^\\.autofix_property_candidates/.+\\.mjs$"
+        }
+      }
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "argv"],
+      "properties": {
+        "label": {"type": "string", "minLength": 1},
+        "argv": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phase", "attempt", "exit_code", "succeeded", "timed_out",
+        "duration_seconds", "stdout", "stderr", "failure_signature"
+      ],
+      "properties": {
+        "phase": {
+          "enum": [
+            "baseline-candidate", "fixed-candidate", "fixed-plan-verification"
+          ]
+        },
+        "attempt": {"type": "integer", "minimum": 1},
+        "exit_code": {"type": "integer"},
+        "succeeded": {"type": "boolean"},
+        "timed_out": {"type": "boolean"},
+        "duration_seconds": {"type": "number", "minimum": 0},
+        "stdout": {"type": "string"},
+        "stderr": {"type": "string"},
+        "failure_signature": {
+          "anyOf": [
+            {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            {"type": "null"}
+          ]
+        }
+      }
+    }
+  }
+}

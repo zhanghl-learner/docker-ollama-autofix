@@ -25,6 +25,7 @@ The next development phase is **safe real-repository integration and evaluation 
 - [CI JSON 契约](docs/CI_CONTRACT_ZH.md) — stable statuses, reserved exit codes, JSON schema, and GitHub Actions usage.
 - [静态分析使用与安全边界](docs/STATIC_ANALYSIS_ZH.md) — declared-tool discovery, explicit execution, JSON contract, and repair integration.
 - [属性测试候选协议](docs/PROPERTY_TESTING_ZH.md) — preview-first Hypothesis candidates, isolated differential execution, and dual-version acceptance.
+- [JavaScript 属性候选协议](docs/JAVASCRIPT_PROPERTY_TESTING_ZH.md) — bounded fast-check preview, declared offline dependency closure, and isolated differential acceptance.
 - [Changelog](CHANGELOG.md) — versioned feature and verification summary.
 
 ## Architecture at a glance
@@ -72,7 +73,8 @@ The model proposes edits but never decides acceptance and never writes directly 
 - `autofix property-check CANDIDATE --project PATH --plan PLAN` previews executable Hypothesis code; `--run` accepts it only after stable failures on the original version, repeated passes on the reviewed fixed version, and a passing plan-bound verification matrix in isolated copies.
 - `autofix property-generate PATH --plan PLAN --model MODEL` asks local Ollama for one schema-constrained Hypothesis candidate, statically rejects obvious side-effect capabilities, and saves it only under `.autofix/property-candidates/` without executing it.
 - `autofix property-promote REPORT --project PATH` revalidates confirmed differential evidence and emits an unapplied, non-overwriting new-test patch plus `applied: false` metadata; it never writes the project test file itself.
-- `autofix property-apply PROMOTION --project PATH` previews the exact committed repair and verification matrix; only explicit `--apply` creates the new regression test, verifies it, and rolls it back on failure without committing or pushing. CI can add `--output ARTIFACT.json` for one exact, non-overwriting JSON receipt.
+- `autofix property-apply PROMOTION --project PATH` previews the exact committed repair and verification matrix; explicit `--apply` verifies the candidate and original matrix inside a detached worktree, cleans isolation, rechecks the original repository, and only then writes the new test without committing or pushing. CI can add `--output ARTIFACT.json` for one exact, non-overwriting JSON receipt.
+- `autofix property-js-check CANDIDATE --project PATH --plan PLAN` previews a bounded JavaScript/fast-check candidate; `--run` copies only its predeclared installed dependency closure into isolated baseline/fixed projects and applies the same stable-failure/fixed-pass/original-matrix acceptance contract without npm or network access.
 - Ordered build matrices can be declared with `build.commands` or repeated `--step`; execution stops at the first failing step and repair is accepted only when every step passes.
 - `autofix repair [PATH]` requires a clean committed Git baseline, then runs baseline reproduction, model edits, and verification in a detached temporary worktree. Dirty/unborn repositories stop before build or Ollama; non-Git projects retain disposable-copy isolation.
 - Failed verified candidates are audited with their exact diff and test regressions, then discarded before the next attempt. Retries start from the same clean baseline, receive cumulative evidence about persistent failures and branch reachability, reject duplicate/cyclic states, and require the actual edit to implement its structured causal diagnosis.

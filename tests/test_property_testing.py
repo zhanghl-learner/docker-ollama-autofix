@@ -683,9 +683,13 @@ def test_property_apply_creates_test_only_after_full_verification(
     def fake_runner(
         root: Path, steps: tuple[BuildStep, ...], **_: object
     ) -> BuildResult:
+        assert root != project
         assert len(steps) == 2
         target = root / steps[0].argv[-2]
         assert target.is_file()
+        (root / "verification-side-effect.txt").write_text(
+            "isolated\n", encoding="utf-8"
+        )
         results = tuple(
             StepResult(step.label, step.argv, 0, "passed\n", "", 0.01)
             for step in steps
@@ -703,6 +707,7 @@ def test_property_apply_creates_test_only_after_full_verification(
     assert not result.rolled_back
     assert (project / result.target_path).is_file()
     assert result.receipt_path is not None and result.receipt_path.is_file()
+    assert not (project / "verification-side-effect.txt").exists()
     receipt = json.loads(result.receipt_path.read_text(encoding="utf-8"))
     assert receipt["applied"] is True
     assert receipt["verification"]["succeeded"] is True
@@ -764,6 +769,76 @@ def test_property_apply_rejects_dirty_repository(
 
     with pytest.raises(PropertyCheckError, match="clean Git"):
         apply_property_promotion(project, promotion)
+
+
+def test_property_apply_rechecks_original_workspace_after_isolated_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, promotion = _ready_promotion(tmp_path, monkeypatch)
+
+    def fake_runner(
+        root: Path, steps: tuple[BuildStep, ...], **_: object
+    ) -> BuildResult:
+        assert root != project
+        (project / "concurrent-user-file.txt").write_text("user work\n", encoding="utf-8")
+        results = tuple(
+            StepResult(step.label, step.argv, 0, "passed\n", "", 0.01)
+            for step in steps
+        )
+        return BuildResult(root, results, "2026-10-30T00:00:00+00:00")
+
+    with pytest.raises(PropertyCheckError, match="changed during isolated"):
+        apply_property_promotion(
+            project,
+            promotion,
+            apply=True,
+            build_runner=fake_runner,
+        )
+
+    promotion_data = json.loads(promotion.read_text(encoding="utf-8"))
+    assert not (project / promotion_data["target_path"]).exists()
+    worktrees = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=project,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    ).stdout
+    assert worktrees.count("worktree ") == 1
+
+
+def test_property_apply_rejects_a_git_ignored_target_after_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, promotion = _ready_promotion(tmp_path, monkeypatch)
+    (project / ".gitignore").write_text(".autofix/\ntests/\n", encoding="utf-8")
+    subprocess.run(["git", "add", ".gitignore"], cwd=project, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "ignore generated tests"],
+        cwd=project,
+        check=True,
+    )
+
+    def fake_runner(
+        root: Path, steps: tuple[BuildStep, ...], **_: object
+    ) -> BuildResult:
+        results = tuple(
+            StepResult(step.label, step.argv, 0, "passed\n", "", 0.01)
+            for step in steps
+        )
+        return BuildResult(root, results, "2026-10-30T00:00:00+00:00")
+
+    with pytest.raises(PropertyCheckError, match="not exactly the new test"):
+        apply_property_promotion(
+            project,
+            promotion,
+            apply=True,
+            build_runner=fake_runner,
+        )
+
+    promotion_data = json.loads(promotion.read_text(encoding="utf-8"))
+    assert not (project / promotion_data["target_path"]).exists()
 
 
 def test_property_apply_cli_json_matches_committed_schema(

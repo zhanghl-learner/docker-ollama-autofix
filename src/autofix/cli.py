@@ -84,6 +84,7 @@ from autofix.property_testing import (
     generate_property_candidate,
     promote_property_candidate,
 )
+from autofix.javascript_property import check_javascript_property_candidate
 from autofix.static_analysis import inspect_static_analysis
 
 
@@ -778,7 +779,9 @@ def property_check_command(
         "--run",
         help="Execute the candidate twice against baseline and fixed isolated copies.",
     ),
-    timeout: float = typer.Option(300, min=0.1, help="Timeout for each isolated step."),
+    timeout: float = typer.Option(
+        300, min=0.1, help="Timeout for each isolated step."
+    ),
     no_save: bool = typer.Option(
         False, "--no-save", help="Do not save the property-check JSON report."
     ),
@@ -845,6 +848,123 @@ def property_check_command(
             )
         else:
             table = Table(title="Property candidate differential evidence")
+            table.add_column("Phase")
+            table.add_column("Attempt")
+            table.add_column("Result")
+            table.add_column("Exit")
+            for evidence in (
+                *result.baseline_runs,
+                *result.fixed_runs,
+                *result.fixed_verification,
+            ):
+                table.add_row(
+                    evidence.phase,
+                    str(evidence.attempt),
+                    "passed" if evidence.succeeded else "failed",
+                    str(evidence.exit_code),
+                )
+            console.print(table)
+            color = "green" if result.passed else "red"
+            console.print(f"[{color}]Verdict: {result.verdict}[/{color}]")
+            if result.report_path:
+                console.print(f"Report: {result.report_path}")
+    if execute and not result.passed:
+        raise typer.Exit(code=1)
+
+
+@app.command("property-js-check")
+def property_javascript_check_command(
+    candidate: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, resolve_path=True
+    ),
+    path: Path = typer.Option(
+        Path("."),
+        "--project",
+        exists=True,
+        file_okay=False,
+        resolve_path=True,
+        help="JavaScript project whose reviewed repair plan is being challenged.",
+    ),
+    plan: Path = typer.Option(
+        ...,
+        "--plan",
+        exists=True,
+        dir_okay=False,
+        resolve_path=True,
+        help="Reviewed local repair plan containing the fixed implementation.",
+    ),
+    execute: bool = typer.Option(
+        False,
+        "--run",
+        help="Execute twice against isolated baseline and fixed project copies.",
+    ),
+    timeout: float = typer.Option(300, min=0.1, help="Timeout for each isolated step."),
+    no_save: bool = typer.Option(
+        False, "--no-save", help="Do not save the JavaScript property report."
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable JSON."
+    ),
+) -> None:
+    """Preview or differentially validate one JavaScript/fast-check candidate."""
+
+    try:
+        if execute and not json_output:
+            with console.status(
+                "[cyan]Running isolated JavaScript baseline/fixed checks...[/cyan]",
+                spinner="dots",
+            ):
+                result = check_javascript_property_candidate(
+                    path,
+                    candidate,
+                    plan,
+                    run=True,
+                    timeout_seconds=timeout,
+                    save_report=not no_save,
+                )
+        else:
+            result = check_javascript_property_candidate(
+                path,
+                candidate,
+                plan,
+                run=execute,
+                timeout_seconds=timeout,
+                save_report=execute and not no_save,
+            )
+    except (OSError, PlanError, PropertyCheckError) as exc:
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "schema": "autofix-javascript-property-check-error",
+                        "version": 1,
+                        "error": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            console.print(f"[red]JavaScript property check stopped: {exc}[/red]")
+        raise typer.Exit(code=2) from exc
+
+    if json_output:
+        _json(result.to_dict())
+    else:
+        console.print(f"Candidate: [cyan]{result.candidate.path}[/cyan]")
+        console.print(f"SHA-256: {result.candidate.sha256}")
+        console.print(f"Plan: [cyan]{result.plan_path}[/cyan]")
+        console.print(
+            "Isolated target: "
+            f"[cyan]{result.candidate.target_path}[/cyan] (original project unchanged)"
+        )
+        console.print(Syntax(result.candidate.source, "javascript", word_wrap=False))
+        if not execute:
+            console.print(
+                "[yellow]Preview only. Re-run with --run after reviewing executable "
+                "candidate code.[/yellow]"
+            )
+        else:
+            table = Table(title="JavaScript property differential evidence")
             table.add_column("Phase")
             table.add_column("Attempt")
             table.add_column("Result")
@@ -1104,6 +1224,9 @@ def property_apply_command(
         console.print(f"Promotion: [cyan]{result.promotion_path}[/cyan]")
         console.print(f"Target: [cyan]{result.target_path}[/cyan]")
         console.print(f"Committed repair baseline: {result.baseline_commit}")
+        console.print(
+            "Verification workspace: detached Git worktree (removed before write-back)"
+        )
         console.print("Verification matrix:")
         for step in result.verification_steps:
             console.print(f"  - {' '.join(step.argv)}")

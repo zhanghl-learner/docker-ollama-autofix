@@ -111,4 +111,4 @@ v1 固定上述十个顶层字段。未进入构建时 `build` 为 `null`；Git 
     if-no-files-found: warn
 ```
 
-`autofix-property-apply` 与通用 `autofix-ci-result` 是两个独立 schema：前者证明某个已晋升属性测试在固定 Git baseline 上通过新回归和 plan 原矩阵，后者描述普通无交互构建。流水线不应把二者混为同一个状态，也不应在 promotion 未经过审核时自动进入 apply job。`property-apply` 成功后只留下未提交测试文件；后续 commit/PR 仍是独立权限阶段。
+`autofix-property-apply` 与通用 `autofix-ci-result` 是两个独立 schema：前者证明某个已晋升属性测试在固定 Git baseline 的 detached worktree 中通过新回归和 plan 原矩阵，后者描述普通无交互构建。流水线不应把二者混为同一个状态，也不应在 promotion 未经过审核时自动进入 apply job。隔离验证完成后还会重新确认原检出未变化，`property-apply` 成功只留下一个 Git 可见的未提交测试文件；后续 commit/PR 仍是独立权限阶段。
