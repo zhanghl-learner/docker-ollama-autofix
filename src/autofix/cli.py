@@ -77,7 +77,12 @@ from autofix.runtime import (
     verify_bundle,
 )
 from autofix.runtime.tools import find_executable
-from autofix.property_testing import PropertyCheckError, check_property_candidate
+from autofix.property_testing import (
+    PropertyCheckError,
+    check_property_candidate,
+    generate_property_candidate,
+    promote_property_candidate,
+)
 from autofix.static_analysis import inspect_static_analysis
 
 
@@ -861,6 +866,157 @@ def property_check_command(
                 console.print(f"Report: {result.report_path}")
     if execute and not result.passed:
         raise typer.Exit(code=1)
+
+
+@app.command("property-generate")
+def property_generate_command(
+    path: Path = typer.Argument(
+        Path("."), exists=True, file_okay=False, resolve_path=True
+    ),
+    plan: Path = typer.Option(
+        ...,
+        "--plan",
+        exists=True,
+        dir_okay=False,
+        resolve_path=True,
+        help="Reviewed repair plan used to derive a regression property.",
+    ),
+    model: str | None = typer.Option(
+        None, help="Installed Ollama model; defaults to project config or first local model."
+    ),
+    ollama_url: str = typer.Option(
+        "http://127.0.0.1:11434", help="Ollama API base URL."
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable JSON."
+    ),
+) -> None:
+    """Generate a review-only Hypothesis candidate; never execute it."""
+
+    config = _load_config_or_exit(path)
+    client = OllamaClient(ollama_url)
+    try:
+        selected_model = model or (config.ollama_model if config else None)
+        if selected_model is None:
+            models = client.list_models()
+            if not models:
+                raise OllamaError("Ollama has no installed models")
+            selected_model = models[0]
+        if not json_output:
+            console.print(f"Using local model: [bold]{selected_model}[/bold]")
+            with console.status(
+                "[yellow]Generating a review-only property candidate...[/yellow]",
+                spinner="dots",
+            ):
+                result = generate_property_candidate(
+                    path,
+                    plan,
+                    client,
+                    model=selected_model,
+                )
+        else:
+            result = generate_property_candidate(
+                path,
+                plan,
+                client,
+                model=selected_model,
+            )
+    except (OSError, OllamaError, PlanError, PropertyCheckError) as exc:
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "schema": "autofix-property-candidate-error",
+                        "version": 1,
+                        "error": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            console.print(f"[red]Property generation stopped: {exc}[/red]")
+        raise typer.Exit(code=2) from exc
+
+    if json_output:
+        _json(result.to_dict())
+        return
+    console.print(f"Rationale: {result.rationale}")
+    console.print(f"Property: {result.property}")
+    console.print(f"Candidate: [cyan]{result.candidate.path}[/cyan]")
+    console.print(f"Metadata: [cyan]{result.metadata_path}[/cyan]")
+    console.print(Syntax(result.candidate.source, "python", word_wrap=False))
+    console.print(
+        "[yellow]Candidate saved for review only; it was not executed and was not "
+        "added to the project test tree.[/yellow]"
+    )
+    console.print("After review, run:")
+    console.print(
+        f'autofix property-check "{result.candidate.path}" '
+        f'--project "{result.root}" --plan "{result.plan_path}" --run'
+    )
+
+
+@app.command("property-promote")
+def property_promote_command(
+    report: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, resolve_path=True
+    ),
+    path: Path = typer.Option(
+        Path("."),
+        "--project",
+        exists=True,
+        file_okay=False,
+        resolve_path=True,
+    ),
+    target: str = typer.Option(
+        "",
+        "--target",
+        help="New relative test path; defaults to tests/test_autofix_property_<sha>.py.",
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable JSON."
+    ),
+) -> None:
+    """Turn confirmed property evidence into an unapplied new-test patch."""
+
+    try:
+        result = promote_property_candidate(
+            path,
+            report,
+            target=target,
+        )
+    except (OSError, PlanError, PropertyCheckError) as exc:
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "schema": "autofix-property-promotion-error",
+                        "version": 1,
+                        "error": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            console.print(f"[red]Property promotion stopped: {exc}[/red]")
+        raise typer.Exit(code=2) from exc
+
+    if json_output:
+        _json(result.to_dict())
+        return
+    console.print(f"Confirmed report: [cyan]{result.report_path}[/cyan]")
+    console.print(f"New test target: [cyan]{result.target_path}[/cyan]")
+    console.print(f"Review patch: [cyan]{result.patch_path}[/cyan]")
+    console.print(f"Patch SHA-256: {result.patch_sha256}")
+    console.print(f"Metadata: [cyan]{result.metadata_path}[/cyan]")
+    console.print(
+        Syntax(result.patch_path.read_text(encoding="utf-8"), "diff", word_wrap=False)
+    )
+    console.print(
+        "[yellow]Patch created for review only. No test file was written and no patch "
+        "was applied.[/yellow]"
+    )
+    console.print(f'Check with: git apply --check "{result.patch_path}"')
 
 
 @app.command("git-status")

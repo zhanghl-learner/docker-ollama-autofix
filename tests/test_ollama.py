@@ -4,7 +4,13 @@ import json
 
 import pytest
 
-from autofix.agent.ollama import FileEdit, OllamaClient, OllamaError, validate_proposal
+from autofix.agent.ollama import (
+    FileEdit,
+    OllamaClient,
+    OllamaError,
+    validate_property_candidate_proposal,
+    validate_proposal,
+)
 
 
 def test_validates_structured_line_edit_proposal() -> None:
@@ -129,3 +135,59 @@ def test_model_schema_excludes_protected_test_paths(monkeypatch: pytest.MonkeyPa
     duplicate_retry_prompt = captured["messages"][1]["content"]  # type: ignore[index]
     assert "equivalent nested condition" in duplicate_retry_prompt
     assert captured["options"] == {"temperature": 0.25}
+
+
+def test_property_candidate_request_is_schema_constrained_and_review_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            candidate = {
+                "rationale": "exercise negative integers",
+                "property": "absolute values are non-negative",
+                "content": (
+                    "from hypothesis import given, strategies as st\n\n"
+                    "from calculator import absolute\n\n"
+                    "@given(st.integers())\n"
+                    "def test_non_negative(value):\n"
+                    "    assert absolute(value) >= 0\n"
+                ),
+            }
+            return {"message": {"content": json.dumps(candidate)}}
+
+    def fake_post(url: str, *, json: dict[str, object], timeout: float) -> Response:
+        captured.update(json)
+        return Response()
+
+    monkeypatch.setattr("autofix.agent.ollama.httpx.post", fake_post)
+
+    proposal = OllamaClient().generate_property_candidate(
+        model="test",
+        plan_summary="fix absolute values",
+        files={"calculator.py": ("return value\n", "return abs(value)\n")},
+    )
+
+    assert proposal.property == "absolute values are non-negative"
+    assert captured["options"] == {"temperature": 0}
+    assert captured["format"]["additionalProperties"] is False  # type: ignore[index]
+    prompt = captured["messages"][1]["content"]  # type: ignore[index]
+    assert "will not be executed now" in prompt
+    assert "BEFORE:\nreturn value" in prompt
+    assert "AFTER:\nreturn abs(value)" in prompt
+
+
+def test_rejects_malformed_property_candidate_response() -> None:
+    with pytest.raises(OllamaError, match="contain only"):
+        validate_property_candidate_proposal(
+            {
+                "rationale": "reason",
+                "property": "invariant",
+                "content": "test",
+                "execute": True,
+            }
+        )

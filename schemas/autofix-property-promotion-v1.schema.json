@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zhanghl-learner/docker-ollama-autofix/blob/main/schemas/autofix-property-promotion-v1.schema.json",
+  "title": "AutoFix Property Promotion v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "version", "root", "report_path", "report_sha256",
+    "candidate_sha256", "plan_path", "target_path", "patch_path",
+    "patch_sha256", "metadata_path", "applied"
+  ],
+  "properties": {
+    "schema": {"const": "autofix-property-promotion"},
+    "version": {"const": 1},
+    "root": {"type": "string", "minLength": 1},
+    "report_path": {"type": "string", "minLength": 1},
+    "report_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "plan_path": {"type": "string", "minLength": 1},
+    "target_path": {"type": "string", "minLength": 4, "pattern": "\\.py$"},
+    "patch_path": {"type": "string", "minLength": 1},
+    "patch_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "metadata_path": {"type": "string", "minLength": 1},
+    "applied": {"const": false}
+  }
+}

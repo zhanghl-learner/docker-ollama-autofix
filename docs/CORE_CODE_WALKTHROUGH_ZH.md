@@ -24,6 +24,10 @@ cli.py
 
 属性测试候选协议位于 `property_testing.py`。它先审核候选结构，再把候选和 plan 修改分别安装到两个临时副本，复用无 shell runner 形成“原始失败、修复通过、原矩阵通过”的差分证据；不会把候选直接写入项目测试目录。
 
+同一模块的 `generate_property_candidate()` 调用 Ollama 的独立候选 schema，只把通过 AST/副作用边界的源码保存为 `.autofix` 审核工件。生成和执行是两个命令，模型没有直接调用 runner 或写项目测试树的能力。
+
+`promote_property_candidate()` 再消费已确认报告，重新绑定 report/candidate/plan 三类摘要，生成一个不覆盖既有文件的新测试 unified patch。它只负责形成可审核工件，不应用 patch。
+
 ## 2. CLI：`src/autofix/cli.py`
 
 CLI 负责参数、用户输出和退出码，不应承载核心修复算法。

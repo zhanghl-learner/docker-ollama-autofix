@@ -419,6 +419,10 @@ flowchart TD
 
 状态机要求 baseline 候选两次失败且规范化签名一致，fixed 候选两次通过，最后 plan 原验证矩阵全部通过。输出转为不含临时根路径的 `PropertyRunEvidence`，JSON v1 不保存候选源码，只保存 SHA-256 和可重现证据。原项目唯一可选写入是 `.autofix/property-checks/` 审计报告；候选不会进入用户测试树。
 
+`property-generate` 是协议之前的非特权生产者。Ollama 只接收 plan 摘要和已审核修改的 before/after 文本，必须返回固定的 rationale/property/content JSON。content 在写入前复用候选 AST 校验，并额外拒绝常见进程、网络、文件系统模块与动态执行调用；输出目录固定为 `.autofix/property-candidates/`。生成命令没有调用 runner 的路径，元数据固定记录 `executed: false`，因此模型不能自行跨过 preview 或差分验收。
+
+`property-promote` 是协议之后的非应用型消费者。它不只读取顶层 verdict，还重新核对完整差分 evidence、报告自身路径和 bytes SHA、候选当前 SHA、项目根以及 plan diff/provenance。目标必须是不存在的测试 `.py` 路径；输出是 `/dev/null → b/tests/...` 的 Git-compatible patch 和 `applied: false` 元数据。函数没有写目标测试文件或调用 Git apply 的路径。
+
 ## 8. 上下文选择与隐私边界
 
 `collect_source_context_with_metadata()` 先从构建输出提取直接引用文件，再有界遍历这些文件能够解析到的项目内依赖：Python 的 `import/from`、JavaScript/TypeScript 的相对 `import/require`、C/C++ 的引号 `include`。遍历带 visited 集合并最多检查 `max_files × 4` 个节点，因此能经过 `__init__.py` 重导出找到实现，又不会被循环或巨大依赖图拖住。Python 绝对模块若不在项目根目录，还可以通过唯一的模块后缀映射到常见 `src/` 布局；出现两个候选时放弃映射，不任意选择。排序依次考虑直接引用的生产文件、本地导入的生产文件、直接引用的测试、其余导入与项目回退源码。这样即使堆栈只指向测试，也能在文件预算耗尽前把被测实现交给模型。`collect_source_context()` 保留兼容的字典返回值。

@@ -11,6 +11,10 @@
 - 新增 Python/Ruff 固定样例，稳定区分“编译成功”和“静态分析契约失败”。
 - 新增 `autofix property-check`：默认预览 Python/Hypothesis 候选，`--run` 在原始与 plan 修复副本中执行稳定反例和双版本验收。
 - 新增严格的 `autofix-property-check` JSON schema v1、absolute-value 固定样例和属性测试安全指南。
+- 新增 `autofix property-generate`：本地 Ollama 基于 reviewed plan 生成 schema-constrained Hypothesis 候选，只保存为 `.autofix` 审核工件且不执行。
+- 新增 `autofix-property-candidate` JSON schema v1，并在落盘前拒绝明显进程、网络、文件系统模块和动态执行调用。
+- 新增 `autofix property-promote`：只把完整 `counterexample-confirmed` 证据转换为未应用的新测试 patch，拒绝覆盖和非测试目标。
+- 新增 `autofix-property-promotion` JSON schema v1，绑定报告、候选、plan、目标和 patch SHA-256，固定记录 `applied: false`。
 - 新增严格的 repair suite JSON schema v3；聚合 required-path context recall、Top-5 recall、平均命中排名、累计文件/字符、截断率和 fallback 比例，v1 baseline 与历史 v2 repair schema 保留。
 - 终端和 suite Markdown 展示上下文召回、排名与发送规模，使“上下文未命中”和“模型生成失败”可以分别诊断。
 - 新增可审计的 `SourceContext` / `ContextSelection`：从构建输出直接路径出发，有界遍历 Python（含包重导出和唯一模块后缀的 `src/` 布局）、JavaScript/TypeScript 与 C/C++ 本地依赖，并记录选择原因、测试属性、字符数和截断状态。
@@ -51,6 +55,8 @@
 - 静态分析便捷绑定不根据主机工具状态推断 Docker 镜像能力；Docker 用户必须通过显式 `--step` 绑定镜像内已审核命令。
 - repair 不把原项目 ignored `.venv`/`node_modules` 路径带入 detached worktree；仅接受 PATH 可达工具，否则在模型调用前给出隔离依赖错误。
 - 属性候选是可执行代码，默认不执行；运行时不写用户测试树，忽略依赖/缓存/符号链接，并要求原始失败、修复通过和 plan 原矩阵通过。
+- 模型生成和候选执行保持独立命令；生成端没有 runner 路径，输出目录固定，元数据明确记录 `executed: false`。
+- 候选晋升只生成 `/dev/null` new-file patch，不写测试目录、不调用 `git apply`；报告 evidence、候选 bytes 和 plan 状态必须重新匹配。
 - 上下文枚举使用可剪枝目录遍历，不进入依赖、缓存、构建产物或符号链接目录；import 图只在已枚举项目源码内解析并设节点上限，歧义模块不猜测。
 - 脏 Git 仓库和尚无 commit 的仓库在构建、Ollama 请求和源码修改前停止；AutoFix 不自动 stash、clean、commit、push 或 merge，只有显式 `--commit` 才能在验证后创建本地提交。
 - worktree 在成功、验证失败、模型异常和 `KeyboardInterrupt` 后定向移除；清理失败不会自动全局 prune，以免影响用户的其他 worktree。
@@ -66,7 +72,9 @@
 
 ### Verified
 
-- Windows 本机 263 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、实时进度/终端 diff、语义重试、可解释上下文排序、静态分析绑定与属性候选协议检查通过。
+- Windows 本机 279 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、实时进度/终端 diff、语义重试、静态分析绑定、属性候选生成/验证/晋升检查通过。
+- 使用本机 `qwen2.5-coder:7b` 从 absolute-value fixture 的 reviewed plan 生成待审 Hypothesis 候选；生成阶段未执行，随后独立差分验证得到两次稳定 baseline failure、两次 fixed pass、原矩阵通过和 `counterexample-confirmed`。
+- 使用真实 confirmed 报告生成默认新测试 patch，`git apply --check` 通过；元数据保持 `applied: false`，检查后项目目标测试文件仍不存在。
 - 隔离 PEP 517 wheel 构建通过，并确认 `autofix/repository.py`、`autofix/agent/artifacts.py`、`autofix/evaluation_suite.py`、`autofix/static_analysis.py` 与 `autofix/property_testing.py` 已包含在生成包中。
 - 使用 `qwen2.5-coder:7b` 在独立 Git 仓库完成失败复现、detached-worktree 预览、plan v4 重放、指定 patch 输出和显式本地 commit 闭环；最终 commit 只包含目标源码并保留 diff trailer。
 

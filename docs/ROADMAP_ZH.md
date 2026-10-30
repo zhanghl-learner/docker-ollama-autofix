@@ -196,6 +196,10 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 
 第十五切片实现 Python/Hypothesis 候选协议：默认只预览可执行源码，`--run` 才在两个临时副本中要求原始版本两次稳定失败、plan 修复版本两次通过、原验证矩阵继续通过。候选有 64 KiB/UTF-8/AST/`@given` 边界，不进入用户测试目录；plan 在执行前重新验证哈希和 provenance。新增 JSON v1 schema、固定 absolute-value 样例和失败 verdict 回归。下一阶段可以研究模型生成候选，但生成端只能产出待审文件，不能绕过本协议或把生成测试计作修复成功。
 
+第十六切片实现本地模型候选生成：`property-generate` 只读取 plan 摘要及已审核修改的 before/after 文件，使用独立严格 JSON schema 取得 rationale/property/content；候选在落盘前通过既有 Hypothesis 结构检查和进程、网络、文件系统、动态执行静态拒绝，只能保存到 `.autofix/property-candidates/`，元数据固定为 `executed: false`。生成与 `property-check --run` 保持权限分离，下一阶段侧重把已确认候选转为人工审核的持久回归测试 patch，而不是自动写入测试树。
+
+第十七切片实现 confirmed candidate 晋升：`property-promote` 重新验证报告完整 evidence、候选 SHA、plan diff/provenance、项目身份和新测试目标，输出 Git-compatible new-file patch 与 `applied: false` JSON；拒绝未确认/残缺报告、候选漂移、越界或非测试路径以及覆盖已有文件。命令不写测试树、不自动 apply/commit。下一阶段评估人工确认后的显式 apply 工作流及 CI artifact 集成，仍不允许默认写回。
+
 ## 8. 文档维护规则
 
 以后每轮迭代至少检查：
