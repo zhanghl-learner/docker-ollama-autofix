@@ -190,6 +190,12 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 
 第十二切片完成上下文消融度量：repair suite 升级为 JSON v3，在保留 v1/v2 schema 的同时新增 required-path recall、Top-5 recall、平均排名、累计文件/字符、截断和 fallback 指标，并同步终端与 Markdown。由此可以区分“必改文件没进入上下文”和“模型看见文件但修复失败”。下一阶段开始接入静态分析信号：先识别项目已经声明并安装的 Ruff、mypy、ESLint、Clippy 等命令，作为显式验证步骤运行，不自动安装依赖。属性测试随后采用隔离生成、先展示后验证的实验模式，不直接写入用户测试目录，也不以生成测试本身作为修复成功。
 
+第十三切片实现声明式静态分析入口：`autofix analyze` 默认只读发现 Ruff、mypy、ESLint、Clippy，`--run` 才通过无 shell runner 执行已声明且本机可用的固定命令；缺失工具返回可操作状态但不自动安装。新增机器可读 JSON v1 schema、项目 `.venv` 路径处理、POSIX 执行权限检查和 CLI 回归。当前通过 `--step` 显式加入 repair，下一切片再设计 plan 绑定快捷选项和静态分析评测 fixture；属性测试继续排在其后。
+
+第十四切片增加本机 `run/repair --with-static-analysis`：在原验证矩阵后严格追加全部项目声明的可用分析器，任一工具缺失即拒绝，重复 argv 去重，Docker 场景不根据主机状态猜测镜像能力。新增“编译通过、Ruff F401 失败”的固定样例，plan 保存展开后的步骤而不是动态发现规则。下一阶段进入隔离式属性测试候选协议：先限定 Python/Hypothesis 的预览、反例复现和双版本验证，不直接写入用户测试目录。
+
+第十五切片实现 Python/Hypothesis 候选协议：默认只预览可执行源码，`--run` 才在两个临时副本中要求原始版本两次稳定失败、plan 修复版本两次通过、原验证矩阵继续通过。候选有 64 KiB/UTF-8/AST/`@given` 边界，不进入用户测试目录；plan 在执行前重新验证哈希和 provenance。新增 JSON v1 schema、固定 absolute-value 样例和失败 verdict 回归。下一阶段可以研究模型生成候选，但生成端只能产出待审文件，不能绕过本协议或把生成测试计作修复成功。
+
 ## 8. 文档维护规则
 
 以后每轮迭代至少检查：

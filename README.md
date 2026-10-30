@@ -23,6 +23,8 @@ The next development phase is **safe real-repository integration and evaluation 
 - [核心代码导读](docs/CORE_CODE_WALKTHROUGH_ZH.md) — the main call paths, data contracts, and module responsibilities.
 - [动手实验](docs/HANDS_ON_ZH.md) — reproducible exercises for preview, plan, patch, commit, and safety rejection.
 - [CI JSON 契约](docs/CI_CONTRACT_ZH.md) — stable statuses, reserved exit codes, JSON schema, and GitHub Actions usage.
+- [静态分析使用与安全边界](docs/STATIC_ANALYSIS_ZH.md) — declared-tool discovery, explicit execution, JSON contract, and repair integration.
+- [属性测试候选协议](docs/PROPERTY_TESTING_ZH.md) — preview-first Hypothesis candidates, isolated differential execution, and dual-version acceptance.
 - [Changelog](CHANGELOG.md) — versioned feature and verification summary.
 
 ## Architecture at a glance
@@ -66,6 +68,8 @@ The model proposes edits but never decides acceptance and never writes directly 
 - `autofix git-status [PATH]` reports the repository root, branch or detached HEAD, baseline commit, tracked/untracked paths, and direct-apply policy without changing Git. Add `--require-clean` for a CI/preflight cleanliness gate.
 - `autofix run [PATH]` executes the selected build plan without a shell and saves a JSON report under `.autofix/runs/`.
 - `autofix ci-check [PATH]` performs non-interactive verification with a versioned JSON envelope and reserved exit codes for pass, verification failure, environment failure, policy rejection, configuration failure, and internal failure.
+- `autofix analyze [PATH]` discovers project-declared Ruff, mypy, ESLint, and Clippy configurations without executing them. Add `--run` to execute only analyzers already available in the project environment, or add `--with-static-analysis` to local `run`/`repair` commands to append all declared analyzers to the acceptance matrix; AutoFix never installs or silently skips missing tools.
+- `autofix property-check CANDIDATE --project PATH --plan PLAN` previews executable Hypothesis code; `--run` accepts it only after stable failures on the original version, repeated passes on the reviewed fixed version, and a passing plan-bound verification matrix in isolated copies.
 - Ordered build matrices can be declared with `build.commands` or repeated `--step`; execution stops at the first failing step and repair is accepted only when every step passes.
 - `autofix repair [PATH]` requires a clean committed Git baseline, then runs baseline reproduction, model edits, and verification in a detached temporary worktree. Dirty/unborn repositories stop before build or Ollama; non-Git projects retain disposable-copy isolation.
 - Failed verified candidates are audited with their exact diff and test regressions, then discarded before the next attempt. Retries start from the same clean baseline, receive cumulative evidence about persistent failures and branch reachability, reject duplicate/cyclic states, and require the actual edit to implement its structured causal diagnosis.

@@ -136,6 +136,8 @@ src/autofix/
 ├── evaluation.py           # 评测契约、隔离 repair 计分与 JSON 报告
 ├── models.py               # BuildStep、ProjectMatch、ProjectInspection
 ├── repository.py           # 只读 Git 身份、porcelain 状态与策略
+├── static_analysis.py      # 声明式静态分析器发现、可用性与固定命令
+├── property_testing.py     # Hypothesis 候选预览与隔离差分验收
 ├── detectors/project.py    # 构建系统与 Python 入口检测
 ├── builders/
 │   ├── runner.py           # 无 shell 的本机构建、超时、运行报告
@@ -402,6 +404,20 @@ flowchart TD
 ```
 
 分类有意保守：不能确定是环境问题时交给普通修复闭环，而不是用宽泛正则提前停止。当前文本模式主要覆盖英文工具输出；未来增加本地化模式时必须同时添加代码错误负向样例。
+
+### 7.1 声明式静态分析发现
+
+`static_analysis.py` 将“项目声明”和“本机可用”分开建模。Ruff/mypy 从 Python 配置或依赖字段识别，ESLint 从 `package.json`、常见配置和本地 `node_modules/.bin` 识别，Clippy 从 Cargo lint 配置识别。仅仅在 PATH 中存在工具不足以触发发现，避免对未采用该规则集的项目强加检查。
+
+`autofix analyze` 默认只序列化 `StaticAnalysisInspection`。`--run` 只选择 `available=True` 的固定 `BuildStep`，通过现有 `run_build()` 无 shell 顺序执行，不调用 pip/npm/cargo install。项目 `.venv` 工具使用受项目根边界检查的相对可执行路径；POSIX 本地文件还必须具有执行权限。JSON 遵循严格的 `autofix-static-analysis` v1 schema。
+
+静态分析步骤不会隐式追加到 build plan。用户先审核发现结果，再通过本机 `run/repair --with-static-analysis` 请求绑定；CLI 要求全部已声明工具可用，将去重后的步骤追加到原验证矩阵。`run` 可以使用项目 `.venv`/`node_modules`；repair 的 detached worktree 不包含常见 ignored 工具目录，因此只接受 PATH 可达的便携工具，否则在模型调用前拒绝。Docker 中的工具存在性也无法由主机发现证明，用户必须显式提供镜像内命令。plan v4 保存展开后的固定 argv，重放时继续校验完整验证矩阵和 provenance，不依赖再次发现。
+
+### 7.2 属性测试候选差分验收
+
+`property_testing.py` 把可执行候选和生产修改分离。候选先经过大小、UTF-8、AST、Hypothesis import、`@given` 和顶层测试函数检查；preview 不创建项目文件或子进程。执行阶段加载并重新校验 repair plan，在两个忽略缓存、依赖目录和符号链接的临时副本中安装候选，只在 fixed 副本应用 plan 的 `ValidatedChange`。
+
+状态机要求 baseline 候选两次失败且规范化签名一致，fixed 候选两次通过，最后 plan 原验证矩阵全部通过。输出转为不含临时根路径的 `PropertyRunEvidence`，JSON v1 不保存候选源码，只保存 SHA-256 和可重现证据。原项目唯一可选写入是 `.autofix/property-checks/` 审计报告；候选不会进入用户测试树。
 
 ## 8. 上下文选择与隐私边界
 

@@ -20,6 +20,10 @@ cli.py
      └─ rollback.py           撤销
 ```
 
+项目级静态分析发现位于 `static_analysis.py`。它不属于模型 agent：只读取已知配置，生成固定 `BuildStep` 并报告可用性；真正执行仍复用 `builders/runner.py`。
+
+属性测试候选协议位于 `property_testing.py`。它先审核候选结构，再把候选和 plan 修改分别安装到两个临时副本，复用无 shell runner 形成“原始失败、修复通过、原矩阵通过”的差分证据；不会把候选直接写入项目测试目录。
+
 ## 2. CLI：`src/autofix/cli.py`
 
 CLI 负责参数、用户输出和退出码，不应承载核心修复算法。
@@ -28,6 +32,7 @@ CLI 负责参数、用户输出和退出码，不应承载核心修复算法。
 
 - `_selected_build_steps()`：把显式参数、配置和自动检测统一成 `BuildStep`；
 - `_docker_config()`：形成受限 Docker 策略；
+- `_append_static_analysis_steps()`：严格追加项目声明且本机可用的分析门禁；
 - `_commit_verified_result()`：把验证结果转换为精确本地 commit 请求；
 - `run()`：只执行构建；
 - `repair()`：调用模型修复，默认 preview；

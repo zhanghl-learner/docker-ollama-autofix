@@ -361,6 +361,12 @@ autofix evaluate-suite examples\complex-validation `
 | `autofix inspect .` | 检测项目和候选命令，可用 `--build-system` 选择 | 否 |
 | `autofix git-status .` | 只读显示 Git 身份、HEAD 和 tracked/untracked 变更 | 否 |
 | `autofix git-status . --require-clean` | 非 Git 或脏工作区返回 1，供 CI/前置门禁使用 | 否 |
+| `autofix analyze .` | 只读发现项目已声明的 Ruff、mypy、ESLint、Clippy | 否 |
+| `autofix analyze . --run` | 执行已声明且本机可用的分析器，不安装缺失工具 | 否；默认写运行报告 |
+| `autofix run . --with-static-analysis` | 在原构建矩阵后追加全部已声明分析器 | 否；缺失任一工具即拒绝 |
+| `autofix repair . --with-static-analysis` | 把全部已声明分析器绑定为 repair 验收门禁 | 仅在 `--apply` 后写回 |
+| `autofix property-check CANDIDATE --project . --plan PLAN` | 预览 Hypothesis 候选及绑定计划 | 否 |
+| `autofix property-check CANDIDATE --project . --plan PLAN --run` | 在原始/修复隔离副本执行差分属性验证 | 否；默认写审计报告 |
 | `autofix init .` | 创建项目配置 | 仅创建配置 |
 | `autofix offline-check .` | 检查断网修复所需资源 | 否 |
 | `autofix run .` | 执行构建/测试并写运行报告 | 否 |
@@ -384,12 +390,18 @@ autofix evaluate-suite examples\complex-validation `
 
 ```powershell
 autofix --help
+autofix analyze --help
+autofix property-check --help
 autofix repair --help
 autofix apply-plan --help
 autofix evaluate-suite --help
 autofix ci-check --help
 autofix bundle --help
 ```
+
+静态分析的声明规则、JSON v1 契约、退出状态以及如何通过 `--step` 加入 repair 验收矩阵，见[静态分析使用与安全边界](STATIC_ANALYSIS_ZH.md)。
+
+属性测试候选的 preview、双版本验证、verdict 和 JSON v1 契约，见[属性测试候选协议](PROPERTY_TESTING_ZH.md)。
 
 ### CI 无交互验证
 

@@ -1,0 +1,4 @@
+version: 1
+build:
+  command: python -m compileall -q main.py
+runtime: {}

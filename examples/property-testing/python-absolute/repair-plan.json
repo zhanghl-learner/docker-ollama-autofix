@@ -1,0 +1,25 @@
+{
+  "format": "autofix-repair-plan",
+  "version": 3,
+  "created_at": "2026-10-30T00:00:00+00:00",
+  "model": "fixture",
+  "summary": "Preserve the absolute-value invariant for negative integers",
+  "changes": [
+    {
+      "path": "calculator.py",
+      "original_sha256": "3eb5fce6bdcd9b23c03eb86f3a6d4da6abe58efc3c20bb7cce71ec3030eae6e5",
+      "content": "\"\"\"Intentionally incomplete implementation for property-check evaluation.\"\"\"\n\n\ndef absolute(value: int) -> int:\n    \"\"\"Return the magnitude of a number.\"\"\"\n\n    return -value if value < 0 else value\n",
+      "reason": "Handle negative values without changing the public function"
+    }
+  ],
+  "verification": {
+    "steps": [
+      {
+        "label": "Compile fixed implementation",
+        "argv": ["python", "-m", "compileall", "-q", "calculator.py"]
+      }
+    ],
+    "runner": "local",
+    "timeout_seconds": 300.0
+  }
+}

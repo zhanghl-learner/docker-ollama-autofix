@@ -1,0 +1,3 @@
+# Keep the hash-bound property fixture byte-identical across Windows and Linux.
+examples/property-testing/python-absolute/project/calculator.py text eol=lf
+examples/property-testing/python-absolute/repair-plan.json text eol=lf

@@ -77,6 +77,8 @@ from autofix.runtime import (
     verify_bundle,
 )
 from autofix.runtime.tools import find_executable
+from autofix.property_testing import PropertyCheckError, check_property_candidate
+from autofix.static_analysis import inspect_static_analysis
 
 
 app = typer.Typer(
@@ -319,6 +321,60 @@ def _selected_build_steps(
         label = "Custom command" if len(commands) == 1 else f"Custom command {index}"
         parsed.append(BuildStep(label, step.argv))
     return tuple(parsed)
+
+
+def _append_static_analysis_steps(
+    root: Path,
+    steps: tuple[BuildStep, ...],
+    *,
+    enabled: bool,
+    docker: bool,
+    isolated_workspace: bool = False,
+) -> tuple[BuildStep, ...]:
+    """Append every declared local analyzer without silently skipping tools."""
+
+    if not enabled:
+        return steps
+    if docker:
+        raise ValueError(
+            "--with-static-analysis currently supports only the local runner; "
+            "use explicit --step commands for analyzers bundled in a Docker image"
+        )
+    inspection = inspect_static_analysis(root)
+    if not inspection.analyzers:
+        raise ValueError(
+            "--with-static-analysis found no supported analyzer declared by the project"
+        )
+    unavailable = tuple(
+        analyzer for analyzer in inspection.analyzers if not analyzer.available
+    )
+    if unavailable:
+        details = "; ".join(
+            f"{analyzer.name}: {analyzer.availability}" for analyzer in unavailable
+        )
+        raise ValueError(
+            "--with-static-analysis requires every declared analyzer to be locally "
+            f"available ({details})"
+        )
+    nonportable = tuple(
+        analyzer
+        for analyzer in inspection.analyzers
+        if analyzer.availability in {"project-venv", "project node_modules"}
+    )
+    if isolated_workspace and nonportable:
+        names = ", ".join(analyzer.name for analyzer in nonportable)
+        raise ValueError(
+            "repair verifies in a detached worktree where ignored project-local tool "
+            f"directories are unavailable ({names}); activate Python tools on PATH or "
+            "use explicit Docker steps with dependencies included in the image"
+        )
+    existing = {step.argv for step in steps}
+    additions = tuple(
+        analyzer.step
+        for analyzer in inspection.analyzers
+        if analyzer.step.argv not in existing
+    )
+    return (*steps, *additions)
 
 
 def _select_inspection_or_exit(
@@ -606,6 +662,205 @@ def inspect_command(
         commands = "\n".join(" ".join(step.argv) for step in match.steps)
         table.add_row("yes" if index == 0 else "", match.language, match.build_system, ", ".join(match.markers), commands)
     console.print(table)
+
+
+@app.command("analyze")
+def analyze_command(
+    path: Path = typer.Argument(
+        Path("."), exists=True, file_okay=False, resolve_path=True
+    ),
+    run: bool = typer.Option(
+        False,
+        "--run",
+        help="Execute declared analyzers that are already locally available.",
+    ),
+    timeout: float = typer.Option(300, min=0.1, help="Timeout for each analyzer."),
+    no_save: bool = typer.Option(
+        False, "--no-save", help="Do not save a build-style analysis report."
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable JSON."
+    ),
+) -> None:
+    """Discover configured static analyzers and optionally run them."""
+
+    inspection = inspect_static_analysis(path)
+    result = None
+    if run and inspection.available_steps:
+        result = run_build(
+            inspection.root,
+            inspection.available_steps,
+            timeout_seconds=timeout,
+            save_report=not no_save,
+        )
+
+    payload = {
+        "schema": "autofix-static-analysis",
+        "version": 1,
+        **inspection.to_dict(),
+        "run_requested": run,
+        "run": result.to_dict() if result else None,
+    }
+    if json_output:
+        _json(payload)
+    else:
+        table = Table(title=f"Static analysis: {inspection.root}")
+        table.add_column("Analyzer")
+        table.add_column("Language")
+        table.add_column("Declared by")
+        table.add_column("Available")
+        table.add_column("Command")
+        table.add_column("Details")
+        for analyzer in inspection.analyzers:
+            table.add_row(
+                analyzer.name,
+                analyzer.language,
+                ", ".join(analyzer.markers),
+                "yes" if analyzer.available else "no",
+                " ".join(analyzer.step.argv),
+                analyzer.availability,
+            )
+        console.print(table)
+        if not inspection.analyzers:
+            console.print(
+                "[yellow]No explicitly configured supported analyzer was found.[/yellow]"
+            )
+        elif run and not inspection.available_steps:
+            console.print(
+                "[yellow]No declared analyzer is locally available; nothing was run.[/yellow]"
+            )
+        if result:
+            for step in result.steps:
+                state = "[green]passed[/green]" if step.succeeded else "[red]failed[/red]"
+                console.print(f"[{step.label}] {state} ({step.duration_seconds:.3f}s)")
+                if step.stdout:
+                    console.print(step.stdout.rstrip())
+                if step.stderr:
+                    console.print(step.stderr.rstrip(), style="yellow")
+            if result.report_path:
+                console.print(f"Report: {result.report_path}")
+
+    if run and not inspection.available_steps:
+        raise typer.Exit(code=2)
+    if result is not None and not result.succeeded:
+        raise typer.Exit(code=result.exit_code or 1)
+
+
+@app.command("property-check")
+def property_check_command(
+    candidate: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, resolve_path=True
+    ),
+    path: Path = typer.Option(
+        Path("."),
+        "--project",
+        exists=True,
+        file_okay=False,
+        resolve_path=True,
+        help="Project whose reviewed repair plan is being challenged.",
+    ),
+    plan: Path = typer.Option(
+        ...,
+        "--plan",
+        exists=True,
+        dir_okay=False,
+        resolve_path=True,
+        help="Reviewed repair plan containing the fixed version and verification matrix.",
+    ),
+    execute: bool = typer.Option(
+        False,
+        "--run",
+        help="Execute the candidate twice against baseline and fixed isolated copies.",
+    ),
+    timeout: float = typer.Option(300, min=0.1, help="Timeout for each isolated step."),
+    no_save: bool = typer.Option(
+        False, "--no-save", help="Do not save the property-check JSON report."
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable JSON."
+    ),
+) -> None:
+    """Preview or differentially validate one Python/Hypothesis candidate."""
+
+    try:
+        if execute and not json_output:
+            with console.status(
+                "[cyan]Running isolated baseline/fixed property checks...[/cyan]",
+                spinner="dots",
+            ):
+                result = check_property_candidate(
+                    path,
+                    candidate,
+                    plan,
+                    run=True,
+                    timeout_seconds=timeout,
+                    save_report=not no_save,
+                )
+        else:
+            result = check_property_candidate(
+                path,
+                candidate,
+                plan,
+                run=execute,
+                timeout_seconds=timeout,
+                save_report=execute and not no_save,
+            )
+    except (OSError, PlanError, PropertyCheckError) as exc:
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "schema": "autofix-property-check-error",
+                        "version": 1,
+                        "error": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            console.print(f"[red]Property check stopped: {exc}[/red]")
+        raise typer.Exit(code=2) from exc
+
+    if json_output:
+        _json(result.to_dict())
+    else:
+        console.print(f"Candidate: [cyan]{result.candidate.path}[/cyan]")
+        console.print(f"SHA-256: {result.candidate.sha256}")
+        console.print(f"Plan: [cyan]{result.plan_path}[/cyan]")
+        console.print(
+            "Isolated target: "
+            f"[cyan]{result.candidate.target_path}[/cyan] (original project unchanged)"
+        )
+        console.print(Syntax(result.candidate.source, "python", word_wrap=False))
+        if not execute:
+            console.print(
+                "[yellow]Preview only. Re-run with --run after reviewing executable "
+                "candidate code.[/yellow]"
+            )
+        else:
+            table = Table(title="Property candidate differential evidence")
+            table.add_column("Phase")
+            table.add_column("Attempt")
+            table.add_column("Result")
+            table.add_column("Exit")
+            for evidence in (
+                *result.baseline_runs,
+                *result.fixed_runs,
+                *result.fixed_verification,
+            ):
+                table.add_row(
+                    evidence.phase,
+                    str(evidence.attempt),
+                    "passed" if evidence.succeeded else "failed",
+                    str(evidence.exit_code),
+                )
+            console.print(table)
+            color = "green" if result.passed else "red"
+            console.print(f"[{color}]Verdict: {result.verdict}[/{color}]")
+            if result.report_path:
+                console.print(f"Report: {result.report_path}")
+    if execute and not result.passed:
+        raise typer.Exit(code=1)
 
 
 @app.command("git-status")
@@ -1318,6 +1573,11 @@ def run(
     dry_run: bool = typer.Option(False, help="Show the plan without executing it."),
     no_save: bool = typer.Option(False, help="Do not save a JSON run report."),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+    with_static_analysis: bool = typer.Option(
+        False,
+        "--with-static-analysis",
+        help="Append every project-declared, locally available static analyzer.",
+    ),
     docker: bool = typer.Option(False, "--docker", help="Run the build in a constrained Docker container."),
     docker_image: str | None = typer.Option(None, help="Container image; defaults by detected build system."),
     docker_cpus: float = typer.Option(2.0, min=0.1, max=64, help="Container CPU limit."),
@@ -1342,6 +1602,16 @@ def run(
     if not steps:
         console.print("[red]No supported build system detected; pass --command explicitly.[/red]")
         raise typer.Exit(code=2)
+    try:
+        steps = _append_static_analysis_steps(
+            inspection.root,
+            steps,
+            enabled=with_static_analysis,
+            docker=docker,
+        )
+    except ValueError as exc:
+        console.print(f"[red]Static analysis configuration error: {exc}[/red]")
+        raise typer.Exit(code=2) from exc
 
     docker_config: DockerConfig | None = None
     try:
@@ -1682,6 +1952,11 @@ def repair(
         False,
         help="Allow proposals that remove most code or top-level definitions; unsafe by default.",
     ),
+    with_static_analysis: bool = typer.Option(
+        False,
+        "--with-static-analysis",
+        help="Append every project-declared, locally available static analyzer.",
+    ),
     docker: bool = typer.Option(False, "--docker", help="Verify builds in a constrained Docker container."),
     docker_image: str | None = typer.Option(None, help="Container image; defaults by detected build system."),
     docker_cpus: float = typer.Option(2.0, min=0.1, max=64, help="Container CPU limit."),
@@ -1728,6 +2003,17 @@ def repair(
     if not steps:
         console.print("[red]No supported build system detected; pass --command explicitly.[/red]")
         raise typer.Exit(code=2)
+    try:
+        steps = _append_static_analysis_steps(
+            inspection.root,
+            steps,
+            enabled=with_static_analysis,
+            docker=docker,
+            isolated_workspace=True,
+        )
+    except ValueError as exc:
+        console.print(f"[red]Static analysis configuration error: {exc}[/red]")
+        raise typer.Exit(code=2) from exc
 
     try:
         validate_git_repair_workspace(inspection.root)

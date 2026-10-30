@@ -4,6 +4,13 @@
 
 ### Added
 
+- 新增 `autofix analyze [PATH]`：默认只读发现项目声明的 Ruff、mypy、ESLint 和 Clippy；`--run` 仅执行本机已可用工具，并保存普通 BuildResult 证据。
+- 新增严格的 `autofix-static-analysis` JSON schema v1，记录声明来源、固定 argv、可用性原因、执行请求和完整运行结果。
+- 新增静态分析专用指南，说明发现规则、退出状态、显式 `repair --step` 集成和后续属性测试安全边界。
+- 新增本机 `run/repair --with-static-analysis` 严格绑定：分析器追加到原验证矩阵，缺失任一声明工具即拒绝，相同 argv 自动去重。
+- 新增 Python/Ruff 固定样例，稳定区分“编译成功”和“静态分析契约失败”。
+- 新增 `autofix property-check`：默认预览 Python/Hypothesis 候选，`--run` 在原始与 plan 修复副本中执行稳定反例和双版本验收。
+- 新增严格的 `autofix-property-check` JSON schema v1、absolute-value 固定样例和属性测试安全指南。
 - 新增严格的 repair suite JSON schema v3；聚合 required-path context recall、Top-5 recall、平均命中排名、累计文件/字符、截断率和 fallback 比例，v1 baseline 与历史 v2 repair schema 保留。
 - 终端和 suite Markdown 展示上下文召回、排名与发送规模，使“上下文未命中”和“模型生成失败”可以分别诊断。
 - 新增可审计的 `SourceContext` / `ContextSelection`：从构建输出直接路径出发，有界遍历 Python（含包重导出和唯一模块后缀的 `src/` 布局）、JavaScript/TypeScript 与 C/C++ 本地依赖，并记录选择原因、测试属性、字符数和截断状态。
@@ -40,6 +47,10 @@
 
 ### Safety
 
+- 静态分析发现不会因 PATH 中偶然存在工具而自动运行；执行必须显式使用 `--run`，不安装依赖、不创建配置、不修改源码，并要求项目本地工具真实存在且在 POSIX 上可执行。
+- 静态分析便捷绑定不根据主机工具状态推断 Docker 镜像能力；Docker 用户必须通过显式 `--step` 绑定镜像内已审核命令。
+- repair 不把原项目 ignored `.venv`/`node_modules` 路径带入 detached worktree；仅接受 PATH 可达工具，否则在模型调用前给出隔离依赖错误。
+- 属性候选是可执行代码，默认不执行；运行时不写用户测试树，忽略依赖/缓存/符号链接，并要求原始失败、修复通过和 plan 原矩阵通过。
 - 上下文枚举使用可剪枝目录遍历，不进入依赖、缓存、构建产物或符号链接目录；import 图只在已枚举项目源码内解析并设节点上限，歧义模块不猜测。
 - 脏 Git 仓库和尚无 commit 的仓库在构建、Ollama 请求和源码修改前停止；AutoFix 不自动 stash、clean、commit、push 或 merge，只有显式 `--commit` 才能在验证后创建本地提交。
 - worktree 在成功、验证失败、模型异常和 `KeyboardInterrupt` 后定向移除；清理失败不会自动全局 prune，以免影响用户的其他 worktree。
@@ -55,8 +66,8 @@
 
 ### Verified
 
-- Windows 本机 236 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、实时进度/终端 diff、语义重试、可解释上下文排序与 v3 检索指标、workflow YAML 和 JSON schema 检查通过。
-- 隔离 PEP 517 wheel 构建通过，并确认 `autofix/repository.py`、`autofix/agent/artifacts.py` 与 `autofix/evaluation_suite.py` 已包含在生成包中。
+- Windows 本机 263 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、实时进度/终端 diff、语义重试、可解释上下文排序、静态分析绑定与属性候选协议检查通过。
+- 隔离 PEP 517 wheel 构建通过，并确认 `autofix/repository.py`、`autofix/agent/artifacts.py`、`autofix/evaluation_suite.py`、`autofix/static_analysis.py` 与 `autofix/property_testing.py` 已包含在生成包中。
 - 使用 `qwen2.5-coder:7b` 在独立 Git 仓库完成失败复现、detached-worktree 预览、plan v4 重放、指定 patch 输出和显式本地 commit 闭环；最终 commit 只包含目标源码并保留 diff trailer。
 
 ### Fixed
