@@ -24,7 +24,8 @@ cli.py
 
 属性测试候选协议位于 `property_testing.py`。它先审核候选结构，再把候选和 plan 修改分别安装到两个临时副本，复用无 shell runner 形成“原始失败、修复通过、原矩阵通过”的差分证据。`promote_property_candidate()` 只生成未应用 patch；`apply_property_promotion()` 则要求修复已精确应用并提交，在显式请求后创建新测试、运行完整矩阵并在失败时回滚，始终不 commit/push。
 
-`javascript_property.py` 是 fast-check 的独立最小切片：`inspect_javascript_property_candidate()` 固定候选文本边界，`_declared_fast_check_packages()` 在不调用 npm 的前提下解析已安装依赖闭包，`check_javascript_property_candidate()` 复用 baseline/fixed 双副本与 plan 验收。它没有生成、promotion 或写回入口，避免 Python 流程的权限被语言扩展隐式继承。
+`javascript_property.py` 是 fast-check 的独立最小切片：`inspect_javascript_property_candidate()` 固定候选文本边界，`_resolve_installed_package()` 按 nested/hoisted 顺序模拟所需的 Node 解析子集，`_declared_fast_check_packages()` 在不调用 npm 的前提下形成有界依赖闭包与摘要证据，`check_javascript_property_candidate()` 复用 baseline/fixed 双副本与 plan 验收。差分入口没有模型生成或写回权限，避免 Python 流程的权限被语言扩展隐式继承。
+`promote_javascript_property_candidate()` 是后置只读证据消费者：重新认证 confirmed report、候选、依赖闭包和 plan 后，只生成未应用 new-file patch。它与 Python promotion 使用不同 schema 和目标规则，避免语言权限被隐式混用。
 
 同一模块的 `generate_property_candidate()` 调用 Ollama 的独立候选 schema，只把通过 AST/副作用边界的源码保存为 `.autofix` 审核工件。生成和执行是两个命令，模型没有直接调用 runner 或写项目测试树的能力。
 

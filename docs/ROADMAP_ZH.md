@@ -208,6 +208,10 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 
 第二十一切片实现 JavaScript/fast-check 最小差分协议：候选必须显式绑定 fast-check 与 node:test，并经过 64 KiB、具名 test、property/assert 和副作用能力门禁；执行只接受 package.json 已声明且本机安装的 fast-check，复制经过无符号链接、10,000 文件、64 MiB 限制的 dependencies 闭包，不运行包管理器或联网。Node baseline/fixed 双副本要求两次稳定失败、两次修复通过及 plan 原矩阵通过，JSON v1 独立于 Python schema。当前不开放模型生成、promotion 或写回；下一阶段先通过更多真实 fast-check 版本和嵌套依赖 fixture 验证兼容性，再决定是否增加 JavaScript 晋升协议。
 
+第二十二切片加固 fast-check 依赖可重现性：解析器支持 requester 内嵌与项目顶层提升两种 Node 布局，保留每个包的原相对安装路径，递归处理必需 dependencies 和已安装 optionalDependencies，并继续拒绝越界名称、符号链接及超限闭包。JavaScript 报告升级为 JSON v2，为实际复制包记录 name/version/path/file count/bytes/manifest SHA-256，v1 schema 保留。真实 Node fixture 分别覆盖 hoisted 与 nested pure-rand，两种布局均完成稳定反例、修复通过和原矩阵验收。下一阶段可设计“confirmed JavaScript report→未应用 `.mjs` patch”的独立晋升协议，但仍不默认写回。
+
+第二十三切片实现 JavaScript confirmed candidate 晋升：`property-js-promote` 只接受完整 v2 confirmed report，重新校验报告身份、候选 bytes、plan diff、两次 baseline/fixed evidence、原矩阵及当前依赖闭包，输出 Git-compatible `.js/.mjs` new-file patch 与 `applied: false` 元数据。默认目标采用 `tests/autofix_property_<sha>.test.mjs`，拒绝覆盖、越界和非测试路径；真实 patch 通过 `git apply --check`。当前不提供 JavaScript property apply，下一阶段先设计 detached-worktree 验证、依赖闭包复检和唯一写回门禁。
+
 ## 8. 文档维护规则
 
 以后每轮迭代至少检查：

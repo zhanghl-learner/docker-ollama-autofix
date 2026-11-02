@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import difflib
 import json
 import re
 import shutil
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from autofix.agent.plans import load_repair_plan
+from autofix.agent.patches import is_test_path
 from autofix.agent.textio import read_utf8_exact, write_utf8_exact
 from autofix.builders import BuildResult, run_build
 from autofix.models import BuildStep
@@ -67,6 +69,31 @@ class JavaScriptPropertyCandidate:
 
 
 @dataclass(frozen=True)
+class JavaScriptDependencyPackage:
+    """One installed package admitted into the isolated dependency closure."""
+
+    name: str
+    version: str
+    relative_path: str
+    source_path: Path
+    file_count: int
+    size_bytes: int
+    package_json_sha256: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize reproducibility evidence without exposing absolute paths."""
+
+        return {
+            "name": self.name,
+            "version": self.version,
+            "relative_path": self.relative_path,
+            "file_count": self.file_count,
+            "size_bytes": self.size_bytes,
+            "package_json_sha256": self.package_json_sha256,
+        }
+
+
+@dataclass(frozen=True)
 class JavaScriptPropertyCheckResult:
     """Preview or differential evidence for one fast-check candidate."""
 
@@ -77,6 +104,7 @@ class JavaScriptPropertyCheckResult:
     command: BuildStep
     run_requested: bool
     verdict: str
+    dependency_packages: tuple[JavaScriptDependencyPackage, ...] = ()
     baseline_runs: tuple[PropertyRunEvidence, ...] = ()
     fixed_runs: tuple[PropertyRunEvidence, ...] = ()
     fixed_verification: tuple[PropertyRunEvidence, ...] = ()
@@ -93,7 +121,7 @@ class JavaScriptPropertyCheckResult:
 
         return {
             "schema": "autofix-javascript-property-check",
-            "version": 1,
+            "version": 2,
             "root": str(self.root),
             "plan_path": str(self.plan_path),
             "plan_diff_sha256": self.plan_diff_sha256,
@@ -102,12 +130,52 @@ class JavaScriptPropertyCheckResult:
             "run_requested": self.run_requested,
             "verdict": self.verdict,
             "passed": self.passed,
+            "dependency_packages": [
+                package.to_dict() for package in self.dependency_packages
+            ],
             "baseline_runs": [item.to_dict() for item in self.baseline_runs],
             "fixed_runs": [item.to_dict() for item in self.fixed_runs],
             "fixed_verification": [
                 item.to_dict() for item in self.fixed_verification
             ],
             "report_path": str(self.report_path) if self.report_path else None,
+        }
+
+
+@dataclass(frozen=True)
+class JavaScriptPropertyPromotionResult:
+    """An unapplied JavaScript regression-test patch with bound evidence."""
+
+    root: Path
+    report_path: Path
+    report_sha256: str
+    candidate_sha256: str
+    plan_path: Path
+    target_path: str
+    dependency_packages: tuple[JavaScriptDependencyPackage, ...]
+    patch_path: Path
+    patch_sha256: str
+    metadata_path: Path
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the immutable identities required before future apply."""
+
+        return {
+            "schema": "autofix-javascript-property-promotion",
+            "version": 1,
+            "root": str(self.root),
+            "report_path": str(self.report_path),
+            "report_sha256": self.report_sha256,
+            "candidate_sha256": self.candidate_sha256,
+            "plan_path": str(self.plan_path),
+            "target_path": self.target_path,
+            "dependency_packages": [
+                package.to_dict() for package in self.dependency_packages
+            ],
+            "patch_path": str(self.patch_path),
+            "patch_sha256": self.patch_sha256,
+            "metadata_path": str(self.metadata_path),
+            "applied": False,
         }
 
 
@@ -186,7 +254,47 @@ def inspect_javascript_property_candidate(
     )
 
 
-def _declared_fast_check_packages(root: Path) -> tuple[tuple[str, Path], ...]:
+def _safe_package_parts(name: str) -> tuple[str, ...]:
+    """Return validated npm package path parts, including scoped names."""
+
+    parts = tuple(name.split("/"))
+    if (
+        not name
+        or ".." in parts
+        or any(not part or part in {".", "node_modules"} for part in parts)
+        or (name.startswith("@") and len(parts) != 2)
+        or (not name.startswith("@") and len(parts) != 1)
+    ):
+        raise PropertyCheckError(f"fast-check has an unsafe dependency name: {name}")
+    return parts
+
+
+def _resolve_installed_package(
+    root: Path, requester: Path | None, name: str
+) -> Path | None:
+    """Resolve a package from a requester's nested or project-hoisted modules."""
+
+    parts = _safe_package_parts(name)
+    candidates = []
+    if requester is not None:
+        candidates.append(requester / "node_modules" / Path(*parts))
+    candidates.append(root / "node_modules" / Path(*parts))
+    for candidate in candidates:
+        if candidate.is_dir():
+            resolved = candidate.resolve()
+            try:
+                resolved.relative_to((root / "node_modules").resolve())
+            except ValueError as exc:
+                raise PropertyCheckError(
+                    f"Installed JavaScript package escapes node_modules: {name}"
+                ) from exc
+            return candidate
+    return None
+
+
+def _declared_fast_check_packages(
+    root: Path,
+) -> tuple[JavaScriptDependencyPackage, ...]:
     """Resolve a bounded, installed fast-check dependency closure without npm."""
 
     manifest = root / "package.json"
@@ -204,65 +312,336 @@ def _declared_fast_check_packages(root: Path) -> tuple[tuple[str, Path], ...]:
             "JavaScript property execution requires fast-check declared in package.json"
         )
 
-    node_modules = root / "node_modules"
-    pending = ["fast-check"]
-    resolved: dict[str, Path] = {}
+    pending: list[tuple[str, Path | None, bool]] = [("fast-check", None, False)]
+    resolved: dict[str, JavaScriptDependencyPackage] = {}
     total_files = 0
     total_bytes = 0
     while pending:
-        name = pending.pop()
-        if name in resolved:
-            continue
-        parts = name.split("/")
-        if (
-            not name
-            or ".." in parts
-            or any(not part for part in parts)
-            or (name.startswith("@") and len(parts) != 2)
-            or (not name.startswith("@") and len(parts) != 1)
-        ):
-            raise PropertyCheckError(f"fast-check has an unsafe dependency name: {name}")
-        package_root = node_modules.joinpath(*parts)
-        if not package_root.is_dir() or package_root.is_symlink():
+        name, requester, optional = pending.pop()
+        package_root = _resolve_installed_package(root, requester, name)
+        if package_root is None:
+            if optional:
+                continue
             raise PropertyCheckError(
                 f"JavaScript property execution requires installed package: {name}"
             )
-        package_files = list(package_root.rglob("*"))
+        relative_path = package_root.relative_to(root).as_posix()
+        if relative_path in resolved:
+            continue
+        if package_root.is_symlink():
+            raise PropertyCheckError(
+                f"Installed JavaScript property dependency contains a symlink: {name}"
+            )
+        package_files = [
+            item
+            for item in package_root.rglob("*")
+            if "node_modules" not in item.relative_to(package_root).parts
+        ]
         if any(item.is_symlink() for item in package_files):
             raise PropertyCheckError(
                 f"Installed JavaScript property dependency contains a symlink: {name}"
             )
         files = [item for item in package_files if item.is_file()]
+        package_bytes = sum(item.stat().st_size for item in files)
         total_files += len(files)
-        total_bytes += sum(item.stat().st_size for item in files)
+        total_bytes += package_bytes
         if total_files > MAX_DEPENDENCY_FILES or total_bytes > MAX_DEPENDENCY_BYTES:
             raise PropertyCheckError("fast-check dependency closure exceeds safety limits")
         package_manifest = package_root / "package.json"
         try:
-            package_data = json.loads(package_manifest.read_text(encoding="utf-8"))
+            package_manifest_bytes = package_manifest.read_bytes()
+            package_data = json.loads(package_manifest_bytes.decode("utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise PropertyCheckError(
                 f"Installed JavaScript package has invalid metadata: {name}"
             ) from exc
         dependencies = package_data.get("dependencies", {})
-        if not isinstance(dependencies, dict):
+        optional_dependencies = package_data.get("optionalDependencies", {})
+        if not isinstance(dependencies, dict) or not isinstance(
+            optional_dependencies, dict
+        ):
             raise PropertyCheckError(
                 f"Installed JavaScript package has invalid dependencies: {name}"
             )
-        pending.extend(dependency for dependency in dependencies if dependency not in resolved)
-        resolved[name] = package_root
-    return tuple(sorted(resolved.items()))
+        package_name = package_data.get("name")
+        version = package_data.get("version")
+        if package_name != name or not isinstance(version, str) or not version:
+            raise PropertyCheckError(
+                f"Installed JavaScript package identity does not match: {name}"
+            )
+        resolved[relative_path] = JavaScriptDependencyPackage(
+            name,
+            version,
+            relative_path,
+            package_root,
+            len(files),
+            package_bytes,
+            hashlib.sha256(package_manifest_bytes).hexdigest(),
+        )
+        pending.extend((dependency, package_root, False) for dependency in dependencies)
+        pending.extend(
+            (dependency, package_root, True)
+            for dependency in optional_dependencies
+            if dependency not in dependencies
+        )
+    return tuple(resolved[path] for path in sorted(resolved))
 
 
 def _install_dependencies(
-    root: Path, packages: tuple[tuple[str, Path], ...]
+    root: Path, packages: tuple[JavaScriptDependencyPackage, ...]
 ) -> None:
     """Copy only the prevalidated fast-check closure into an isolated project."""
 
-    for name, source in packages:
-        destination = root / "node_modules" / Path(*name.split("/"))
+    for package in packages:
+        destination = root / package.relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source, destination)
+        shutil.copytree(
+            package.source_path,
+            destination,
+            ignore=shutil.ignore_patterns("node_modules"),
+        )
+
+
+def _load_confirmed_report(
+    report_path: Path, project_root: Path
+) -> tuple[
+    dict[str, Any],
+    JavaScriptPropertyCandidate,
+    Path,
+    tuple[JavaScriptDependencyPackage, ...],
+    str,
+]:
+    """Reload and authenticate a complete JavaScript differential report."""
+
+    if not report_path.is_file() or report_path.is_symlink():
+        raise PropertyCheckError("JavaScript property report must be a regular JSON file")
+    report_bytes = report_path.read_bytes()
+    try:
+        data = json.loads(report_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PropertyCheckError(
+            "JavaScript property report must contain valid UTF-8 JSON"
+        ) from exc
+    required = {
+        "schema",
+        "version",
+        "root",
+        "plan_path",
+        "plan_diff_sha256",
+        "candidate",
+        "command",
+        "run_requested",
+        "verdict",
+        "passed",
+        "dependency_packages",
+        "baseline_runs",
+        "fixed_runs",
+        "fixed_verification",
+        "report_path",
+    }
+    if not isinstance(data, dict) or set(data) != required:
+        raise PropertyCheckError("JavaScript property report has an unsupported structure")
+    if (
+        data["schema"] != "autofix-javascript-property-check"
+        or data["version"] != 2
+        or data["verdict"] != "counterexample-confirmed"
+        or data["passed"] is not True
+        or data["run_requested"] is not True
+    ):
+        raise PropertyCheckError(
+            "Only a v2 counterexample-confirmed JavaScript report can be promoted"
+        )
+    baseline_runs = data.get("baseline_runs")
+    fixed_runs = data.get("fixed_runs")
+    fixed_verification = data.get("fixed_verification")
+    evidence_valid = (
+        isinstance(baseline_runs, list)
+        and len(baseline_runs) == 2
+        and all(
+            isinstance(item, dict)
+            and item.get("phase") == "baseline-candidate"
+            and item.get("succeeded") is False
+            and isinstance(item.get("failure_signature"), str)
+            for item in baseline_runs
+        )
+        and len({item["failure_signature"] for item in baseline_runs}) == 1
+        and isinstance(fixed_runs, list)
+        and len(fixed_runs) == 2
+        and all(
+            isinstance(item, dict)
+            and item.get("phase") == "fixed-candidate"
+            and item.get("succeeded") is True
+            for item in fixed_runs
+        )
+        and isinstance(fixed_verification, list)
+        and bool(fixed_verification)
+        and all(
+            isinstance(item, dict)
+            and item.get("phase") == "fixed-plan-verification"
+            and item.get("succeeded") is True
+            for item in fixed_verification
+        )
+    )
+    if not evidence_valid:
+        raise PropertyCheckError(
+            "JavaScript report lacks complete confirmed differential evidence"
+        )
+    try:
+        reported_root = Path(data["root"]).expanduser().resolve()
+        reported_path = Path(data["report_path"]).expanduser().resolve()
+        plan_path = Path(data["plan_path"]).expanduser().resolve()
+    except TypeError as exc:
+        raise PropertyCheckError("JavaScript property report contains invalid paths") from exc
+    if reported_root != project_root:
+        raise PropertyCheckError("JavaScript property report belongs to another project")
+    if reported_path != report_path:
+        raise PropertyCheckError(
+            "JavaScript property report path does not match its saved identity"
+        )
+    candidate_data = data.get("candidate")
+    if not isinstance(candidate_data, dict) or not isinstance(
+        candidate_data.get("path"), str
+    ):
+        raise PropertyCheckError("JavaScript property report has invalid candidate metadata")
+    candidate = inspect_javascript_property_candidate(candidate_data["path"])
+    if candidate.to_dict() != candidate_data:
+        raise PropertyCheckError(
+            "JavaScript property candidate changed after differential validation"
+        )
+    packages = _declared_fast_check_packages(project_root)
+    if [package.to_dict() for package in packages] != data["dependency_packages"]:
+        raise PropertyCheckError(
+            "JavaScript property dependency closure changed after validation"
+        )
+    return (
+        data,
+        candidate,
+        plan_path,
+        packages,
+        hashlib.sha256(report_bytes).hexdigest(),
+    )
+
+
+def _promotion_target(
+    root: Path, target: str, candidate_sha256: str
+) -> tuple[str, Path]:
+    """Validate a new JavaScript test target without allowing replacement."""
+
+    requested = (
+        target.strip()
+        or f"tests/autofix_property_{candidate_sha256[:12]}.test.mjs"
+    )
+    relative = Path(requested.replace("\\", "/"))
+    if (
+        relative.is_absolute()
+        or ".." in relative.parts
+        or relative.suffix.lower() not in {".js", ".mjs"}
+    ):
+        raise PropertyCheckError(
+            "JavaScript promotion target must be a safe relative .js or .mjs path"
+        )
+    if not is_test_path(relative):
+        raise PropertyCheckError(
+            "JavaScript promotion target must use a recognized test path"
+        )
+    destination = (root / relative).resolve()
+    try:
+        destination.relative_to(root)
+    except ValueError as exc:
+        raise PropertyCheckError(
+            "JavaScript promotion target escapes the project root"
+        ) from exc
+    if destination.exists():
+        raise PropertyCheckError(
+            f"JavaScript promotion target already exists: {relative.as_posix()}"
+        )
+    return relative.as_posix(), destination
+
+
+def _render_new_test_patch(target_path: str, source: str) -> str:
+    """Render one deterministic Git new-file patch for reviewed JavaScript."""
+
+    normalized = source.replace("\r\n", "\n").replace("\r", "\n")
+    diff_lines = list(
+        difflib.unified_diff(
+            [],
+            normalized.splitlines(keepends=True),
+            fromfile="/dev/null",
+            tofile=f"b/{target_path}",
+        )
+    )
+    if diff_lines and not diff_lines[-1].endswith("\n"):
+        diff_lines[-1] += "\n\\ No newline at end of file\n"
+    return (
+        f"diff --git a/{target_path} b/{target_path}\n"
+        "new file mode 100644\n"
+        + "".join(diff_lines)
+    )
+
+
+def promote_javascript_property_candidate(
+    root: Path | str,
+    report: Path | str,
+    *,
+    target: str = "",
+) -> JavaScriptPropertyPromotionResult:
+    """Create an unapplied JavaScript test patch from confirmed v2 evidence."""
+
+    project_root = Path(root).expanduser().resolve()
+    report_path = Path(report).expanduser().resolve()
+    report_data, candidate, plan_path, packages, report_sha256 = (
+        _load_confirmed_report(report_path, project_root)
+    )
+    plan, _ = load_repair_plan(plan_path, project_root)
+    _validate_plan_policy(plan)
+    if plan.diff_sha256 != report_data["plan_diff_sha256"]:
+        raise PropertyCheckError(
+            "JavaScript property report is bound to another plan diff"
+        )
+    target_path, _ = _promotion_target(project_root, target, candidate.sha256)
+    patch = _render_new_test_patch(target_path, candidate.source)
+    patch_bytes = patch.encode("utf-8")
+    patch_sha256 = hashlib.sha256(patch_bytes).hexdigest()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    output_dir = project_root / ".autofix" / "javascript-property-patches"
+    patch_path = output_dir / f"{stamp}.patch"
+    metadata_path = output_dir / f"{stamp}.json"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    patch_created = False
+    metadata_created = False
+    try:
+        with patch_path.open("xb") as stream:
+            stream.write(patch_bytes)
+        patch_created = True
+        result = JavaScriptPropertyPromotionResult(
+            project_root,
+            report_path,
+            report_sha256,
+            candidate.sha256,
+            plan_path,
+            target_path,
+            packages,
+            patch_path,
+            patch_sha256,
+            metadata_path,
+        )
+        with metadata_path.open("x", encoding="utf-8", newline="") as stream:
+            metadata_created = True
+            stream.write(json.dumps(result.to_dict(), ensure_ascii=False, indent=2) + "\n")
+    except OSError as exc:
+        for created, artifact in (
+            (metadata_created, metadata_path),
+            (patch_created, patch_path),
+        ):
+            if created:
+                try:
+                    artifact.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        raise PropertyCheckError(
+            f"Unable to write JavaScript promotion artifact: {exc}"
+        ) from exc
+    return result
 
 
 def _save_result(
@@ -317,6 +696,7 @@ def check_javascript_property_candidate(
     if not run:
         return result
     packages = _declared_fast_check_packages(project_root)
+    result = replace(result, dependency_packages=packages)
 
     with tempfile.TemporaryDirectory(prefix="autofix-js-property-") as temporary:
         temporary_root = Path(temporary)

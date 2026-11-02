@@ -24,7 +24,9 @@
 3. `node_modules/fast-check` 已存在，且依赖闭包的 package metadata 有效；
 4. 依赖闭包不包含符号链接，总计不超过 10,000 个文件和 64 MiB。
 
-AutoFix 从已安装包的 `dependencies` 递归解析闭包，只把该闭包复制到 baseline/fixed 临时副本。它不复制整个 `node_modules`，不运行 npm/yarn/pnpm，不读取远端 registry，也不临时安装缺失包。
+AutoFix 按 Node 常见解析顺序，从请求包自身的 `node_modules` 开始，再检查项目顶层提升目录；因此支持 npm 常见的 hoisted 与 nested 布局。普通 `dependencies` 必须存在，已安装的 `optionalDependencies` 会纳入证据，缺失 optional 包不会阻断。每个包复制时保留相对安装路径，并排除未声明的嵌套 `node_modules`。
+
+它不复制整个依赖树，不运行 npm/yarn/pnpm，不读取远端 registry，也不临时安装缺失包。执行报告会记录每个实际复制包的名称、版本、相对路径、文件数、字节数和 `package.json` SHA-256，以区分同名包的不同嵌套版本并支持结果审计。
 
 ## 3. 使用方式
 
@@ -49,10 +51,28 @@ autofix property-js-check .\candidate_property.mjs `
 
 ## 4. 输出与限制
 
-JSON 遵循 [`autofix-javascript-property-check` v1](../schemas/autofix-javascript-property-check-v1.schema.json)。报告默认写入 `.autofix/javascript-property-checks/`，`--no-save` 可关闭。
+JSON 遵循 [`autofix-javascript-property-check` v2](../schemas/autofix-javascript-property-check-v2.schema.json)，新增 `dependency_packages` 执行闭包证据；preview 时该数组为空。历史 [v1 schema](../schemas/autofix-javascript-property-check-v1.schema.json) 保留用于读取已保存报告。报告默认写入 `.autofix/javascript-property-checks/`，`--no-save` 可关闭。
 
 - preview 或 `counterexample-confirmed`：退出 0；
 - 差分契约未确认：退出 1；
 - 候选、依赖、Node、plan 或策略错误：退出 2。
 
-当前切片只负责候选 preview 和差分确认，尚不支持 JavaScript 候选的模型生成、promotion 或 property-apply。Python promotion 的 schema 和写回流程不会自动接受 JavaScript 报告；扩展前需要单独设计 `.mjs` 目标、patch 和依赖可重现性契约。
+## 5. 将确认候选晋升为审核 patch
+
+只有保存为 JSON、版本为 v2 且 verdict 为 `counterexample-confirmed` 的报告可以晋升：
+
+```powershell
+autofix property-js-promote `
+  .\my-js-project\.autofix\javascript-property-checks\REPORT.json `
+  --project .\my-js-project
+```
+
+晋升会重新检查：报告路径与 bytes SHA、两次稳定 baseline 失败、两次 fixed 通过、plan 原矩阵通过、候选当前源码与 SHA、plan diff，以及当前 fast-check 依赖闭包的版本/路径/规模/manifest SHA。任一证据漂移都会拒绝。
+
+默认目标为 `tests/autofix_property_<sha>.test.mjs`。`--target` 只接受尚不存在、项目内且能识别为测试的 `.js`/`.mjs` 路径。输出目录 `.autofix/javascript-property-patches/` 包含 Git-compatible new-file patch 与 `applied: false` JSON 元数据：
+
+```powershell
+git apply --check ".\.autofix\javascript-property-patches\PATCH.patch"
+```
+
+命令不创建目标测试、不调用 `git apply`、不 commit/push。当前仍不支持 JavaScript 候选的模型生成或 property-apply；人工审核 patch 后如何安全写回属于下一权限阶段，不能复用 Python apply 而跳过 `.mjs` 与依赖证据校验。

@@ -84,7 +84,10 @@ from autofix.property_testing import (
     generate_property_candidate,
     promote_property_candidate,
 )
-from autofix.javascript_property import check_javascript_property_candidate
+from autofix.javascript_property import (
+    check_javascript_property_candidate,
+    promote_javascript_property_candidate,
+)
 from autofix.static_analysis import inspect_static_analysis
 
 
@@ -937,7 +940,7 @@ def property_javascript_check_command(
                 json.dumps(
                     {
                         "schema": "autofix-javascript-property-check-error",
-                        "version": 1,
+                        "version": 2,
                         "error": str(exc),
                     },
                     ensure_ascii=False,
@@ -964,6 +967,13 @@ def property_javascript_check_command(
                 "candidate code.[/yellow]"
             )
         else:
+            console.print("Isolated dependency closure:")
+            for package in result.dependency_packages:
+                console.print(
+                    f"  - {package.name}@{package.version} "
+                    f"[{package.relative_path}, {package.file_count} files, "
+                    f"{package.size_bytes} bytes]"
+                )
             table = Table(title="JavaScript property differential evidence")
             table.add_column("Phase")
             table.add_column("Attempt")
@@ -987,6 +997,69 @@ def property_javascript_check_command(
                 console.print(f"Report: {result.report_path}")
     if execute and not result.passed:
         raise typer.Exit(code=1)
+
+
+@app.command("property-js-promote")
+def property_javascript_promote_command(
+    report: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, resolve_path=True
+    ),
+    path: Path = typer.Option(
+        Path("."),
+        "--project",
+        exists=True,
+        file_okay=False,
+        resolve_path=True,
+    ),
+    target: str = typer.Option(
+        "",
+        "--target",
+        help="New .js/.mjs test path; defaults to tests/autofix_property_<sha>.test.mjs.",
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable JSON."
+    ),
+) -> None:
+    """Turn confirmed JavaScript evidence into an unapplied new-test patch."""
+
+    try:
+        result = promote_javascript_property_candidate(
+            path,
+            report,
+            target=target,
+        )
+    except (OSError, PlanError, PropertyCheckError) as exc:
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "schema": "autofix-javascript-property-promotion-error",
+                        "version": 1,
+                        "error": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            console.print(f"[red]JavaScript property promotion stopped: {exc}[/red]")
+        raise typer.Exit(code=2) from exc
+
+    if json_output:
+        _json(result.to_dict())
+        return
+    console.print(f"Confirmed report: [cyan]{result.report_path}[/cyan]")
+    console.print(f"New test target: [cyan]{result.target_path}[/cyan]")
+    console.print(f"Review patch: [cyan]{result.patch_path}[/cyan]")
+    console.print(f"Patch SHA-256: {result.patch_sha256}")
+    console.print(f"Metadata: [cyan]{result.metadata_path}[/cyan]")
+    console.print(
+        Syntax(result.patch_path.read_text(encoding="utf-8"), "diff", word_wrap=False)
+    )
+    console.print(
+        "[yellow]Patch created for review only. No test file was written and no patch "
+        "was applied.[/yellow]"
+    )
+    console.print(f'Check with: git apply --check "{result.patch_path}"')
 
 
 @app.command("property-generate")

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zhanghl-learner/docker-ollama-autofix/blob/main/schemas/autofix-javascript-property-promotion-v1.schema.json",
+  "title": "AutoFix JavaScript Property Promotion v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "version", "root", "report_path", "report_sha256",
+    "candidate_sha256", "plan_path", "target_path", "dependency_packages",
+    "patch_path", "patch_sha256", "metadata_path", "applied"
+  ],
+  "properties": {
+    "schema": {"const": "autofix-javascript-property-promotion"},
+    "version": {"const": 1},
+    "root": {"type": "string", "minLength": 1},
+    "report_path": {"type": "string", "minLength": 1},
+    "report_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "plan_path": {"type": "string", "minLength": 1},
+    "target_path": {"type": "string", "pattern": "\\.(?:js|mjs)$"},
+    "dependency_packages": {
+      "type": "array", "minItems": 1,
+      "items": {"$ref": "#/$defs/dependency"}
+    },
+    "patch_path": {"type": "string", "pattern": "\\.patch$"},
+    "patch_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "metadata_path": {"type": "string", "pattern": "\\.json$"},
+    "applied": {"const": false}
+  },
+  "$defs": {
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name", "version", "relative_path", "file_count", "size_bytes",
+        "package_json_sha256"
+      ],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1},
+        "relative_path": {"type": "string", "pattern": "^node_modules/"},
+        "file_count": {"type": "integer", "minimum": 1},
+        "size_bytes": {"type": "integer", "minimum": 1},
+        "package_json_sha256": {
+          "type": "string", "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

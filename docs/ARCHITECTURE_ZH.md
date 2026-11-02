@@ -425,7 +425,9 @@ flowchart TD
 
 `property-apply` 是独立的显式写入门禁。它要求当前 Git HEAD 已提交且工作区干净，重新验证 promotion 整条摘要链，并逐文件确认 plan 审核后的生产代码已精确存在于当前项目。默认只返回目标与固定验证矩阵；`--apply` 从同一 HEAD 创建 detached worktree，在其中写候选并依次运行新属性回归和 plan 原矩阵。隔离空间成功清理后再次检查原仓库 HEAD、指纹、clean 状态和 promotion bytes，才独占创建真实测试；写回后的 blocking changes 必须恰好是这个 untracked 目标，忽略规则隐藏或并发额外修改都会触发删除。成功也不 commit/push。`autofix-property-apply` v1 回执把 baseline commit、固定 argv、BuildResult 和回滚状态固定为 CI 可归档证据；显式 `--output` 通过已完整写入并同步的临时文件原子创建最终工件，拒绝覆盖已有路径，回执发布失败也会回滚测试写入。
 
-`javascript_property.py` 复用同一差分 evidence 和 plan 门禁，但保持独立 schema 与无写回权限。静态层要求 `fc`/`test` 分别绑定 fast-check/node:test，并拒绝常见系统、网络、动态执行能力；依赖层只接受 `package.json` 已声明且本地安装的 fast-check，递归校验其普通 dependencies、符号链接、文件数和字节上限，再把最小闭包复制到 baseline/fixed 临时项目。执行固定使用 Node 内置 test runner 的无子进程隔离模式。该路径不调用包管理器、模型、promotion 或 property apply。
+`javascript_property.py` 复用同一差分 evidence 和 plan 门禁，但保持独立 schema 与无写回权限。静态层要求 `fc`/`test` 分别绑定 fast-check/node:test，并拒绝常见系统、网络、动态执行能力；依赖层只接受 `package.json` 已声明且本地安装的 fast-check，按 requester nested→项目 hoisted 顺序递归解析 dependencies/optionalDependencies，校验包身份、符号链接、文件数和字节上限，再按原相对布局把最小闭包复制到 baseline/fixed 临时项目。JSON v2 为每个复制包保存版本、相对位置、规模和 manifest SHA-256。执行固定使用 Node 内置 test runner 的无子进程隔离模式。差分执行不调用包管理器、模型或 property apply。
+
+JavaScript 的 promotion 仍是独立、无应用权限的消费者：它只接受完整 confirmed v2 report，重新读取候选和当前依赖闭包，验证 plan diff 与全部差分 evidence，然后输出 `/dev/null → b/tests/...mjs` patch。元数据绑定 report/candidate/plan/dependencies/patch 的摘要并固定 `applied: false`。它不调用模型、Node runner、Git apply 或写目标测试；后续 apply 必须另行设计并再次验证这些身份。
 
 ## 8. 上下文选择与隐私边界
 
