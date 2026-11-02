@@ -7,7 +7,6 @@ import difflib
 import hashlib
 import importlib.util
 import json
-import os
 import re
 import shutil
 import sys
@@ -23,6 +22,13 @@ from autofix.agent.plans import RepairPlan, load_repair_plan
 from autofix.agent.textio import read_utf8_exact, write_utf8_exact
 from autofix.builders import BuildResult, run_build
 from autofix.models import BuildStep
+from autofix.property_apply import (
+    ExclusiveProjectFile,
+    PropertyApplyPolicyError,
+    has_exact_untracked_target,
+    load_applied_reviewed_plan,
+    publish_json_exclusive,
+)
 from autofix.repository import (
     GitInspectionError,
     GitWorktreeError,
@@ -641,54 +647,16 @@ def _load_promotion(
     if patch_bytes != expected_patch:
         raise PropertyCheckError("Promoted patch does not match the confirmed candidate")
     try:
-        plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise PropertyCheckError("Repair plan is unavailable or malformed") from exc
-    raw_changes = plan_data.get("changes") if isinstance(plan_data, dict) else None
-    verification = plan_data.get("verification") if isinstance(plan_data, dict) else None
-    if not isinstance(raw_changes, list) or not raw_changes:
-        raise PropertyCheckError("Repair plan has no reviewed changes")
-    for change in raw_changes:
-        if (
-            not isinstance(change, dict)
-            or not isinstance(change.get("path"), str)
-            or not isinstance(change.get("content"), str)
-        ):
-            raise PropertyCheckError("Repair plan contains invalid reviewed changes")
-        relative = Path(change["path"])
-        current = (project_root / relative).resolve()
-        try:
-            current.relative_to(project_root)
-        except ValueError as exc:
-            raise PropertyCheckError("Repair plan path escapes the project root") from exc
-        if not current.is_file() or read_utf8_exact(current) != change["content"]:
-            raise PropertyCheckError(
-                f"Reviewed repair is not applied exactly: {relative.as_posix()}"
-            )
-    if not isinstance(verification, dict) or verification.get("runner") != "local":
-        raise PropertyCheckError("Property apply requires a local plan verification policy")
-    raw_steps = verification.get("steps")
-    if not isinstance(raw_steps, list) or not raw_steps:
-        raise PropertyCheckError("Repair plan has no verification steps")
-    steps: list[BuildStep] = []
-    for raw in raw_steps:
-        if (
-            not isinstance(raw, dict)
-            or set(raw) != {"label", "argv"}
-            or not isinstance(raw["label"], str)
-            or not isinstance(raw["argv"], list)
-            or not raw["argv"]
-            or not all(isinstance(item, str) and item for item in raw["argv"])
-        ):
-            raise PropertyCheckError("Repair plan contains invalid verification steps")
-        steps.append(BuildStep(raw["label"], tuple(raw["argv"])))
-    if report_data["plan_diff_sha256"] != plan_data.get("diff_sha256"):
+        plan = load_applied_reviewed_plan(plan_path, project_root)
+    except PropertyApplyPolicyError as exc:
+        raise PropertyCheckError(str(exc)) from exc
+    if report_data["plan_diff_sha256"] != plan.data.get("diff_sha256"):
         raise PropertyCheckError("Property report no longer matches the repair plan diff")
     property_step = BuildStep(
         "Run promoted property regression",
         (sys.executable, "-m", "pytest", target_path, "-q"),
     )
-    return data, candidate, (property_step, *steps)
+    return data, candidate, (property_step, *plan.steps)
 
 
 def apply_property_promotion(
@@ -808,59 +776,33 @@ def apply_property_promotion(
             "the test file was not written"
         )
 
-    created_directories: list[Path] = []
-    parent = destination.parent
-    while parent != project_root and not parent.exists():
-        created_directories.append(parent)
-        parent = parent.parent
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    created = False
     try:
-        with destination.open("x", encoding="utf-8", newline="") as stream:
-            stream.write(refreshed_candidate.source)
-        created = True
-        try:
-            written_status = inspect_git_workspace(project_root)
-        except GitInspectionError as exc:
-            raise PropertyCheckError(
-                f"Unable to verify the written property test with Git: {exc}"
-            ) from exc
-        prefix = (
-            ""
-            if written_status.project_subpath in {None, "."}
-            else f"{written_status.project_subpath}/"
-        )
-        expected_change = f"{prefix}{data['target_path']}"
-        blocking = written_status.blocking_changes
-        if (
-            written_status.head_commit != git_status.head_commit
-            or written_status.repository_fingerprint != git_status.repository_fingerprint
-            or len(blocking) != 1
-            or not blocking[0].untracked
-            or blocking[0].path != expected_change
-        ):
-            raise PropertyCheckError(
-                "Git changes after property write are not exactly the new test file; "
-                "the test file was removed"
+        with ExclusiveProjectFile(
+            project_root, destination, refreshed_candidate.source
+        ) as created_file:
+            try:
+                written_status = inspect_git_workspace(project_root)
+            except GitInspectionError as exc:
+                raise PropertyCheckError(
+                    f"Unable to verify the written property test with Git: {exc}"
+                ) from exc
+            if not has_exact_untracked_target(
+                git_status, written_status, data["target_path"]
+            ):
+                raise PropertyCheckError(
+                    "Git changes after property write are not exactly the new test file; "
+                    "the test file was removed"
+                )
+            saved_result = _save_property_apply_result(
+                project_root,
+                result,
+                save_receipt=save_receipt,
+                receipt_output=receipt_output,
             )
-        return _save_property_apply_result(
-            project_root,
-            result,
-            save_receipt=save_receipt,
-            receipt_output=receipt_output,
-        )
-    except Exception:
-        if created:
-            try:
-                destination.unlink(missing_ok=True)
-            except OSError:
-                pass
-        for directory in created_directories:
-            try:
-                directory.rmdir()
-            except OSError:
-                break
-        raise
+            created_file.retain()
+            return saved_result
+    except PropertyApplyPolicyError as exc:
+        raise PropertyCheckError(str(exc)) from exc
 
 
 def _save_property_apply_result(
@@ -890,36 +832,12 @@ def _save_property_apply_receipt(
 ) -> None:
     """Publish a complete receipt without overwriting an existing artifact."""
 
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists():
-        raise PropertyCheckError(f"Property apply receipt already exists: {destination}")
-    payload = json.dumps(result.to_dict(), ensure_ascii=False, indent=2) + "\n"
-    temporary_path: Path | None = None
     try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            newline="\n",
-            dir=destination.parent,
-            prefix=f".{destination.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-            temporary_path = Path(stream.name)
-        os.link(temporary_path, destination)
-        temporary_path.unlink()
-    except OSError as exc:
-        if temporary_path is not None:
-            try:
-                temporary_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-        raise PropertyCheckError(
-            f"Unable to publish property apply receipt: {exc}"
-        ) from exc
+        publish_json_exclusive(
+            destination, result.to_dict(), label="Property apply receipt"
+        )
+    except PropertyApplyPolicyError as exc:
+        raise PropertyCheckError(str(exc)) from exc
 
 
 def _copy_ignore(directory: str, names: list[str]) -> set[str]:

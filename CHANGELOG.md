@@ -55,6 +55,7 @@
 
 ### Changed
 
+- Python 与 JavaScript 属性 apply 共用 reviewed plan 认证、唯一 Git 目标检查、默认回滚文件创建和不可覆盖回执发布原语，减少高权限安全逻辑分叉。
 - `property-apply` 的候选回归与 plan 验证从真实项目迁移到当前 HEAD 的 detached worktree；只有隔离清理和原仓库复检全部成功才写入目标测试。
 - 上下文排序从“生产文件统一优先”升级为“错误输出直达生产文件→直达文件的本地生产依赖→直达测试→其余有界源码”，以在固定字符预算内减少无关文件竞争。
 - 模型提示新增通用可达性规则：若 guard 排除失败输入，应修改 guard 或更早控制流；禁止在 predicate 已由外层分支保证时添加等价内层条件。
@@ -84,12 +85,13 @@
 
 ### CI
 
+- Windows/Linux 测试显式固定 Node 22，并单独运行真实 fast-check 差分和 JavaScript apply CLI/worktree 契约，不依赖 runner 偶然预装的 Node。
 - Windows/Linux 测试任务在编译和 pytest 前验证干净 Git 检出契约。
 - Windows/Linux pytest 改由 `autofix ci-check` 执行，并通过 `actions/upload-artifact@v7` 始终上传 JSON/JUnit 证据；workflow 不调用模型或自动修改仓库。
 
 ### Verified
 
-- Windows 本机 306 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、实时进度/终端 diff、语义重试、静态分析绑定、Python 与 JavaScript 属性差分/晋升、隔离应用与失败回滚检查通过。
+- Windows 本机 312 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、实时进度/终端 diff、语义重试、静态分析绑定、Python 与 JavaScript 属性差分/晋升、隔离应用与失败回滚检查通过。
 - 独立 CLI 子进程在真实临时 Git 仓库执行 property apply，两步 pytest 验证通过，确定路径回执与 stdout JSON 完全一致；目标冲突回归确认新测试被撤销。
 - 使用真实 Node test runner 和离线 fast-check fixture 完成 JavaScript 稳定反例与修复双版本闭环；TAP 毫秒耗时在失败签名中规范化，避免把运行时间抖动误判为反例不稳定。
 - hoisted 与 fast-check 内嵌两种 pure-rand 布局均通过真实 Node 差分闭环；v2 证据准确区分两个安装相对位置并保存 manifest digest。

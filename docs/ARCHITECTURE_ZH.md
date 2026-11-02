@@ -138,6 +138,7 @@ src/autofix/
 ├── repository.py           # 只读 Git 身份、porcelain 状态与策略
 ├── static_analysis.py      # 声明式静态分析器发现、可用性与固定命令
 ├── property_testing.py     # Hypothesis 候选预览与隔离差分验收
+├── property_apply.py       # 跨语言 plan、唯一写回、Git 门禁与原子回执原语
 ├── detectors/project.py    # 构建系统与 Python 入口检测
 ├── builders/
 │   ├── runner.py           # 无 shell 的本机构建、超时、运行报告
@@ -424,6 +425,8 @@ flowchart TD
 `property-promote` 是协议之后的非应用型消费者。它不只读取顶层 verdict，还重新核对完整差分 evidence、报告自身路径和 bytes SHA、候选当前 SHA、项目根以及 plan diff/provenance。目标必须是不存在的测试 `.py` 路径；输出是 `/dev/null → b/tests/...` 的 Git-compatible patch 和 `applied: false` 元数据。函数没有写目标测试文件或调用 Git apply 的路径。
 
 `property-apply` 是独立的显式写入门禁。它要求当前 Git HEAD 已提交且工作区干净，重新验证 promotion 整条摘要链，并逐文件确认 plan 审核后的生产代码已精确存在于当前项目。默认只返回目标与固定验证矩阵；`--apply` 从同一 HEAD 创建 detached worktree，在其中写候选并依次运行新属性回归和 plan 原矩阵。隔离空间成功清理后再次检查原仓库 HEAD、指纹、clean 状态和 promotion bytes，才独占创建真实测试；写回后的 blocking changes 必须恰好是这个 untracked 目标，忽略规则隐藏或并发额外修改都会触发删除。成功也不 commit/push。`autofix-property-apply` v1 回执把 baseline commit、固定 argv、BuildResult 和回滚状态固定为 CI 可归档证据；显式 `--output` 通过已完整写入并同步的临时文件原子创建最终工件，拒绝覆盖已有路径，回执发布失败也会回滚测试写入。
+
+Python 与 JavaScript 的语言专用模块负责候选语法、依赖和 evidence 身份；共同的高权限动作集中在 `property_apply.py`。`load_applied_reviewed_plan()` 统一要求当前生产文件逐字匹配审核结果，`ExclusiveProjectFile` 默认回滚且只有显式 retain 才保留，`has_exact_untracked_target()` 统一检查 HEAD/仓库指纹/唯一 untracked 目标，`publish_json_exclusive()` 统一执行 fsync 后的非覆盖原子回执发布。共享层不调用模型、runner 或包管理器，避免新增语言时复制并逐渐分叉安全规则。
 
 `javascript_property.py` 复用同一差分 evidence 和 plan 门禁，但保持独立 schema。静态层要求 `fc`/`test` 分别绑定 fast-check/node:test，并拒绝常见系统、网络、动态执行能力；依赖层只接受 `package.json` 已声明且本地安装的 fast-check，按 requester nested→项目 hoisted 顺序递归解析 dependencies/optionalDependencies，校验包身份、符号链接、文件数和字节上限，再按原相对布局把最小闭包复制到 baseline/fixed 临时项目。JSON v2 为每个复制包保存版本、相对位置、规模和 manifest SHA-256。执行固定使用 Node 内置 test runner 的无子进程隔离模式。差分执行不调用包管理器或模型。
 

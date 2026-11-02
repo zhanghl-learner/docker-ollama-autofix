@@ -11,6 +11,7 @@ cli.py
  ├─ builders/runner.py        本机执行
  ├─ builders/docker.py        Docker 执行
  ├─ repository.py             Git 身份、门禁和 worktree
+ ├─ property_apply.py         属性回归共享写入与回执安全原语
  └─ agent/repair.py           修复状态机
      ├─ context.py            选择有限上下文
      ├─ ollama.py             模型协议
@@ -26,6 +27,8 @@ cli.py
 
 `javascript_property.py` 是 fast-check 的独立最小切片：`inspect_javascript_property_candidate()` 固定候选文本边界，`_resolve_installed_package()` 按 nested/hoisted 顺序模拟所需的 Node 解析子集，`_declared_fast_check_packages()` 在不调用 npm 的前提下形成有界依赖闭包与摘要证据，`check_javascript_property_candidate()` 复用 baseline/fixed 双副本与 plan 验收。
 `promote_javascript_property_candidate()` 是后置只读证据消费者，只生成未应用 new-file patch；`apply_javascript_property_promotion()` 则重新认证 report/candidate/plan/dependencies/patch，要求干净且已提交的修复，在 detached worktree 中复制最小依赖闭包并执行候选与原矩阵。只有清理、原仓库复检和证据复检均通过后才新增一个 Git 可见测试，失败不写回，成功也不 commit/push。JavaScript 全程使用独立 schema 和目标规则，避免继承 Python 流程的隐式权限。
+
+两种语言的 apply 不再分别实现高权限文件操作。`property_apply.py` 提供 reviewed plan 当前状态认证、唯一 Git 变更判断、默认回滚的新文件上下文管理器和不可覆盖 JSON 发布；语言模块只负责组装自身候选与证据。这一边界使安全规则可以由同一组单元测试约束。
 
 同一模块的 `generate_property_candidate()` 调用 Ollama 的独立候选 schema，只把通过 AST/副作用边界的源码保存为 `.autofix` 审核工件。生成和执行是两个命令，模型没有直接调用 runner 或写项目测试树的能力。
 

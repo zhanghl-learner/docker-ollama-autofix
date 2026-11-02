@@ -31,6 +31,11 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      - name: Set up Node for JavaScript property contracts
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
       - name: Install development dependencies
         run: python -m pip install -e ".[dev]"
 
@@ -77,6 +82,11 @@ jobs:
 
       - name: Validate Node evaluation baseline
         run: autofix evaluate examples/complex-validation/node-checkout-service --no-save
+
+      - name: Validate real JavaScript property worktree contract
+        run: >-
+          python -m pytest tests/test_javascript_property.py -q
+          -k "real_differential_loop or apply_cli_real_worktree_json_matches_schema"
 
   docker-self-host:
     name: Docker self-host
@@ -128,3 +138,4 @@ jobs:
           python -m pip install --force-reinstall dist/*.whl
           autofix --version
           autofix inspect . --json
+          autofix property-js-apply --help

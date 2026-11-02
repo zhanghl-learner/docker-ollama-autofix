@@ -124,3 +124,5 @@ autofix property-js-apply $env:AUTOFIX_JS_PROMOTION `
 ```
 
 该回执额外绑定实际复制的离线 fast-check 依赖闭包。job 必须预先提供与 promotion 摘要一致的 `node_modules`；命令不会从 registry 安装依赖。成功仍只留下一个未提交的 JavaScript 测试文件，不能直接赋予流水线 push 权限。
+
+仓库 CI 在 Windows 与 Linux 上通过 `actions/setup-node` 固定 Node 22，不依赖 runner 偶然预装版本；除全量 pytest 外，还单独执行真实 fast-check 差分与 JavaScript apply CLI/worktree 用例。若以后调整 Node 主版本，必须让这组隔离闭环在两个系统同时通过。
