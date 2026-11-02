@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,8 +12,10 @@ from typer.testing import CliRunner
 from autofix.agent.ollama import FileChange, RepairProposal
 from autofix.agent.patches import validate_changes
 from autofix.agent.plans import save_repair_plan
+from autofix.agent.textio import write_utf8_exact
 from autofix.cli import app
 from autofix.javascript_property import (
+    apply_javascript_property_promotion,
     check_javascript_property_candidate,
     inspect_javascript_property_candidate,
     promote_javascript_property_candidate,
@@ -185,6 +189,41 @@ def _confirmed_report(
     assert checked.report_path is not None
     assert checked.verdict == "counterexample-confirmed"
     return project, plan, candidate, checked.report_path
+
+
+def _git(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    """Run one deterministic Git fixture command and require success."""
+
+    return subprocess.run(
+        ["git", *args],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+
+def _ready_promotion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path, str]:
+    """Create reviewed evidence, then commit the exact repaired JavaScript source."""
+
+    project, plan, _, report = _confirmed_report(tmp_path, monkeypatch)
+    promotion = promote_javascript_property_candidate(project, report)
+    plan_data = json.loads(plan.read_text(encoding="utf-8"))
+    write_utf8_exact(
+        project / "calculator.js", plan_data["changes"][0]["content"]
+    )
+    (project / ".gitignore").write_text(
+        ".autofix/\nnode_modules/\n", encoding="utf-8"
+    )
+    _git(project, "init")
+    _git(project, "config", "user.email", "autofix@example.invalid")
+    _git(project, "config", "user.name", "AutoFix Test")
+    _git(project, "add", "calculator.js", "package.json", ".gitignore")
+    _git(project, "commit", "-m", "Apply reviewed repair")
+    return project, promotion.metadata_path, promotion.target_path
 
 
 def test_javascript_candidate_preview_is_static_and_non_mutating(tmp_path: Path) -> None:
@@ -384,3 +423,155 @@ def test_javascript_promotion_cli_json_matches_schema(
     assert schema["properties"]["schema"]["const"] == payload["schema"]
     assert set(schema["required"]) == set(payload)
     assert payload["applied"] is False
+
+
+def test_javascript_apply_preview_is_non_mutating(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, promotion, target = _ready_promotion(tmp_path, monkeypatch)
+
+    result = apply_javascript_property_promotion(project, promotion)
+
+    assert result.apply_requested is False
+    assert result.applied is False
+    assert result.verification is None
+    assert result.verification_steps[0].argv[1:3] == (
+        "--test",
+        "--test-isolation=none",
+    )
+    assert not (project / target).exists()
+
+
+def test_javascript_apply_verifies_in_worktree_and_writes_only_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, promotion, target = _ready_promotion(tmp_path, monkeypatch)
+    observed_root: Path | None = None
+
+    def fake_runner(
+        root: Path, steps: tuple[BuildStep, ...], **_: object
+    ) -> BuildResult:
+        nonlocal observed_root
+        observed_root = root
+        assert root != project
+        assert (root / target).is_file()
+        assert (root / "node_modules" / "fast-check" / "package.json").is_file()
+        assert (root / "node_modules" / "pure-rand" / "package.json").is_file()
+        (root / "worktree-side-effect.txt").write_text("isolated", encoding="utf-8")
+        evidence = tuple(
+            StepResult(step.label, step.argv, 0, "passed\n", "", 0.01)
+            for step in steps
+        )
+        return BuildResult(root, evidence, "2026-11-02T00:00:00+00:00")
+
+    result = apply_javascript_property_promotion(
+        project, promotion, apply=True, build_runner=fake_runner
+    )
+
+    assert observed_root is not None
+    assert result.applied is True
+    assert result.rolled_back is False
+    assert (project / target).is_file()
+    assert not (project / "worktree-side-effect.txt").exists()
+    assert result.receipt_path is not None and result.receipt_path.is_file()
+    payload = json.loads(result.receipt_path.read_text(encoding="utf-8"))
+    assert payload["schema"] == "autofix-javascript-property-apply"
+    assert payload["applied"] is True
+
+
+def test_javascript_apply_verification_failure_does_not_write_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, promotion, target = _ready_promotion(tmp_path, monkeypatch)
+
+    def failing_runner(
+        root: Path, steps: tuple[BuildStep, ...], **_: object
+    ) -> BuildResult:
+        step = steps[0]
+        evidence = StepResult(step.label, step.argv, 1, "", "failed\n", 0.01)
+        return BuildResult(root, (evidence,), "2026-11-02T00:00:00+00:00")
+
+    result = apply_javascript_property_promotion(
+        project, promotion, apply=True, build_runner=failing_runner
+    )
+
+    assert result.applied is False
+    assert result.rolled_back is True
+    assert not (project / target).exists()
+    assert result.receipt_path is not None and result.receipt_path.is_file()
+
+
+def test_javascript_apply_rejects_git_ignored_target_and_removes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, promotion, target = _ready_promotion(tmp_path, monkeypatch)
+    (project / ".gitignore").write_text(
+        ".autofix/\nnode_modules/\ntests/\n", encoding="utf-8"
+    )
+    _git(project, "add", ".gitignore")
+    _git(project, "commit", "-m", "Ignore generated tests")
+
+    def fake_runner(
+        root: Path, steps: tuple[BuildStep, ...], **_: object
+    ) -> BuildResult:
+        evidence = tuple(
+            StepResult(step.label, step.argv, 0, "passed\n", "", 0.01)
+            for step in steps
+        )
+        return BuildResult(root, evidence, "2026-11-02T00:00:00+00:00")
+
+    with pytest.raises(PropertyCheckError, match="not exactly the new test file"):
+        apply_javascript_property_promotion(
+            project, promotion, apply=True, build_runner=fake_runner
+        )
+    assert not (project / target).exists()
+
+
+@pytest.mark.skipif(find_executable("node") is None, reason="Node.js is not installed")
+def test_javascript_apply_cli_real_worktree_json_matches_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project, promotion, target = _ready_promotion(tmp_path, monkeypatch)
+    receipt = tmp_path / "javascript-apply-receipt.json"
+    environment = os.environ.copy()
+    source_root = str(Path(__file__).resolve().parents[1] / "src")
+    environment["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (source_root, environment.get("PYTHONPATH", "")))
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "autofix",
+            "property-js-apply",
+            str(promotion),
+            "--project",
+            str(project),
+            "--apply",
+            "--output",
+            str(receipt),
+            "--json",
+        ],
+        cwd=project,
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    payload = json.loads(completed.stdout)
+    schema_path = (
+        Path(__file__).resolve().parents[1]
+        / "schemas"
+        / "autofix-javascript-property-apply-v1.schema.json"
+    )
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    assert schema["properties"]["schema"]["const"] == payload["schema"]
+    assert set(schema["required"]) == set(payload)
+    assert payload["applied"] is True
+    assert len(payload["verification_steps"]) == 2
+    assert payload["receipt_path"] == str(receipt.resolve())
+    assert (project / target).is_file()

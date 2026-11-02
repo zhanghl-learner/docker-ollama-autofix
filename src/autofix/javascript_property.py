@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import difflib
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -28,6 +29,12 @@ from autofix.property_testing import (
     _validate_plan_policy,
 )
 from autofix.runtime.tools import find_executable
+from autofix.repository import (
+    GitInspectionError,
+    GitWorktreeError,
+    create_detached_worktree,
+    inspect_git_workspace,
+)
 
 
 BANNED_JS_MODULES = {
@@ -176,6 +183,50 @@ class JavaScriptPropertyPromotionResult:
             "patch_sha256": self.patch_sha256,
             "metadata_path": str(self.metadata_path),
             "applied": False,
+        }
+
+
+@dataclass(frozen=True)
+class JavaScriptPropertyApplyResult:
+    """Preview or verified application of one promoted JavaScript test."""
+
+    root: Path
+    promotion_path: Path
+    target_path: str
+    candidate_sha256: str
+    baseline_commit: str
+    dependency_packages: tuple[JavaScriptDependencyPackage, ...]
+    apply_requested: bool
+    applied: bool
+    rolled_back: bool
+    verification_steps: tuple[BuildStep, ...]
+    verification: BuildResult | None = None
+    receipt_path: Path | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the stable JavaScript property-apply JSON envelope."""
+
+        return {
+            "schema": "autofix-javascript-property-apply",
+            "version": 1,
+            "root": str(self.root),
+            "promotion_path": str(self.promotion_path),
+            "target_path": self.target_path,
+            "candidate_sha256": self.candidate_sha256,
+            "baseline_commit": self.baseline_commit,
+            "dependency_packages": [
+                package.to_dict() for package in self.dependency_packages
+            ],
+            "apply_requested": self.apply_requested,
+            "applied": self.applied,
+            "rolled_back": self.rolled_back,
+            "verification_steps": [
+                step.to_dict() for step in self.verification_steps
+            ],
+            "verification": (
+                self.verification.to_dict() if self.verification else None
+            ),
+            "receipt_path": str(self.receipt_path) if self.receipt_path else None,
         }
 
 
@@ -642,6 +693,398 @@ def promote_javascript_property_candidate(
             f"Unable to write JavaScript promotion artifact: {exc}"
         ) from exc
     return result
+
+
+def _load_promotion(
+    path: Path, project_root: Path
+) -> tuple[
+    dict[str, Any],
+    JavaScriptPropertyCandidate,
+    tuple[JavaScriptDependencyPackage, ...],
+    tuple[BuildStep, ...],
+]:
+    """Authenticate a JavaScript promotion and current repaired project state."""
+
+    if not path.is_file() or path.is_symlink():
+        raise PropertyCheckError(
+            "JavaScript property promotion metadata must be a regular file"
+        )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PropertyCheckError(
+            "JavaScript property promotion metadata must be valid UTF-8 JSON"
+        ) from exc
+    required = {
+        "schema",
+        "version",
+        "root",
+        "report_path",
+        "report_sha256",
+        "candidate_sha256",
+        "plan_path",
+        "target_path",
+        "dependency_packages",
+        "patch_path",
+        "patch_sha256",
+        "metadata_path",
+        "applied",
+    }
+    if (
+        not isinstance(data, dict)
+        or set(data) != required
+        or data.get("schema") != "autofix-javascript-property-promotion"
+        or data.get("version") != 1
+        or data.get("applied") is not False
+    ):
+        raise PropertyCheckError(
+            "JavaScript property promotion metadata has an unsupported structure"
+        )
+    try:
+        recorded_root = Path(data["root"]).expanduser().resolve()
+        metadata_path = Path(data["metadata_path"]).expanduser().resolve()
+        report_path = Path(data["report_path"]).expanduser().resolve()
+        plan_path = Path(data["plan_path"]).expanduser().resolve()
+        patch_path = Path(data["patch_path"]).expanduser().resolve()
+    except TypeError as exc:
+        raise PropertyCheckError(
+            "JavaScript property promotion contains invalid paths"
+        ) from exc
+    if recorded_root != project_root or metadata_path != path:
+        raise PropertyCheckError(
+            "JavaScript property promotion belongs to another project or path"
+        )
+    report_data, candidate, report_plan, packages, report_sha256 = (
+        _load_confirmed_report(report_path, project_root)
+    )
+    if report_sha256 != data["report_sha256"]:
+        raise PropertyCheckError("Confirmed JavaScript report changed after promotion")
+    if candidate.sha256 != data["candidate_sha256"]:
+        raise PropertyCheckError("Promoted JavaScript candidate identity changed")
+    if report_plan != plan_path:
+        raise PropertyCheckError(
+            "JavaScript promotion and report reference different plans"
+        )
+    if [package.to_dict() for package in packages] != data["dependency_packages"]:
+        raise PropertyCheckError(
+            "JavaScript promotion dependency evidence no longer matches"
+        )
+    if not patch_path.is_file() or patch_path.is_symlink():
+        raise PropertyCheckError("Promoted JavaScript patch is missing or unsafe")
+    patch_bytes = patch_path.read_bytes()
+    if hashlib.sha256(patch_bytes).hexdigest() != data["patch_sha256"]:
+        raise PropertyCheckError("Promoted JavaScript patch changed after review")
+    target_path, _ = _promotion_target(
+        project_root, data["target_path"], candidate.sha256
+    )
+    expected_patch = _render_new_test_patch(target_path, candidate.source).encode("utf-8")
+    if patch_bytes != expected_patch:
+        raise PropertyCheckError(
+            "Promoted JavaScript patch does not match the confirmed candidate"
+        )
+    try:
+        plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PropertyCheckError("JavaScript repair plan is unavailable or malformed") from exc
+    raw_changes = plan_data.get("changes") if isinstance(plan_data, dict) else None
+    verification = plan_data.get("verification") if isinstance(plan_data, dict) else None
+    if not isinstance(raw_changes, list) or not raw_changes:
+        raise PropertyCheckError("JavaScript repair plan has no reviewed changes")
+    for change in raw_changes:
+        if (
+            not isinstance(change, dict)
+            or not isinstance(change.get("path"), str)
+            or not isinstance(change.get("content"), str)
+        ):
+            raise PropertyCheckError(
+                "JavaScript repair plan contains invalid reviewed changes"
+            )
+        relative = Path(change["path"])
+        current = (project_root / relative).resolve()
+        try:
+            current.relative_to(project_root)
+        except ValueError as exc:
+            raise PropertyCheckError(
+                "JavaScript repair plan path escapes the project root"
+            ) from exc
+        if not current.is_file() or read_utf8_exact(current) != change["content"]:
+            raise PropertyCheckError(
+                f"Reviewed JavaScript repair is not applied exactly: {relative.as_posix()}"
+            )
+    if not isinstance(verification, dict) or verification.get("runner") != "local":
+        raise PropertyCheckError(
+            "JavaScript property apply requires a local plan verification policy"
+        )
+    raw_steps = verification.get("steps")
+    if not isinstance(raw_steps, list) or not raw_steps:
+        raise PropertyCheckError("JavaScript repair plan has no verification steps")
+    steps: list[BuildStep] = []
+    for raw in raw_steps:
+        if (
+            not isinstance(raw, dict)
+            or set(raw) != {"label", "argv"}
+            or not isinstance(raw["label"], str)
+            or not isinstance(raw["argv"], list)
+            or not raw["argv"]
+            or not all(isinstance(item, str) and item for item in raw["argv"])
+        ):
+            raise PropertyCheckError(
+                "JavaScript repair plan contains invalid verification steps"
+            )
+        steps.append(BuildStep(raw["label"], tuple(raw["argv"])))
+    if report_data["plan_diff_sha256"] != plan_data.get("diff_sha256"):
+        raise PropertyCheckError(
+            "JavaScript property report no longer matches the repair plan diff"
+        )
+    return data, candidate, packages, tuple(steps)
+
+
+def apply_javascript_property_promotion(
+    root: Path | str,
+    promotion: Path | str,
+    *,
+    apply: bool = False,
+    timeout_seconds: float = 300,
+    save_receipt: bool = True,
+    receipt_output: Path | str | None = None,
+    build_runner: Callable[..., BuildResult] = run_build,
+) -> JavaScriptPropertyApplyResult:
+    """Preview or apply a JavaScript promotion after isolated verification."""
+
+    project_root = Path(root).expanduser().resolve()
+    promotion_path = Path(promotion).expanduser().resolve()
+    try:
+        git_status = inspect_git_workspace(project_root)
+    except GitInspectionError as exc:
+        raise PropertyCheckError(f"Unable to inspect Git workspace: {exc}") from exc
+    if (
+        not git_status.is_repository
+        or git_status.head_commit is None
+        or not git_status.clean
+    ):
+        raise PropertyCheckError(
+            "JavaScript property apply requires a clean Git repository with a committed repair"
+        )
+    data, candidate, packages, plan_steps = _load_promotion(
+        promotion_path, project_root
+    )
+    node = find_executable("node") if apply else "node"
+    if apply and node is None:
+        raise PropertyCheckError("JavaScript property apply requires node in PATH")
+    property_step = BuildStep(
+        "Run promoted JavaScript property regression",
+        (str(node), "--test", "--test-isolation=none", data["target_path"]),
+    )
+    steps = (property_step, *plan_steps)
+    result = JavaScriptPropertyApplyResult(
+        project_root,
+        promotion_path,
+        data["target_path"],
+        candidate.sha256,
+        git_status.head_commit,
+        packages,
+        apply,
+        False,
+        False,
+        steps,
+    )
+    if not apply:
+        return result
+
+    try:
+        worktree = create_detached_worktree(git_status)
+    except GitWorktreeError as exc:
+        raise PropertyCheckError(
+            f"Unable to create JavaScript property verification worktree: {exc}"
+        ) from exc
+    try:
+        _install_dependencies(worktree.project_root, packages)
+        isolated_target = worktree.project_root / data["target_path"]
+        isolated_target.parent.mkdir(parents=True, exist_ok=True)
+        write_utf8_exact(isolated_target, candidate.source)
+        verification_result = build_runner(
+            worktree.project_root,
+            steps,
+            timeout_seconds=timeout_seconds,
+            save_report=False,
+        )
+        verification_result = replace(
+            verification_result, root=project_root, report_path=None
+        )
+    except BaseException as exc:
+        try:
+            worktree.close()
+        except GitWorktreeError as cleanup_error:
+            exc.add_note(
+                "JavaScript property worktree cleanup also failed: "
+                f"{cleanup_error}"
+            )
+        raise
+    try:
+        worktree.close()
+    except GitWorktreeError as exc:
+        raise PropertyCheckError(
+            f"Unable to clean JavaScript property worktree: {exc}"
+        ) from exc
+
+    result = replace(
+        result,
+        applied=verification_result.succeeded,
+        rolled_back=not verification_result.succeeded,
+        verification=verification_result,
+    )
+    if not verification_result.succeeded:
+        return _save_apply_result(
+            project_root,
+            result,
+            save_receipt=save_receipt,
+            receipt_output=receipt_output,
+        )
+
+    try:
+        current_status = inspect_git_workspace(project_root)
+    except GitInspectionError as exc:
+        raise PropertyCheckError(
+            f"Unable to recheck Git workspace after JavaScript verification: {exc}"
+        ) from exc
+    if (
+        not current_status.clean
+        or current_status.head_commit != git_status.head_commit
+        or current_status.repository_fingerprint != git_status.repository_fingerprint
+    ):
+        raise PropertyCheckError(
+            "Git workspace changed during isolated JavaScript verification; "
+            "the test file was not written"
+        )
+    refreshed_data, refreshed_candidate, refreshed_packages, refreshed_plan_steps = (
+        _load_promotion(promotion_path, project_root)
+    )
+    if (
+        refreshed_data["target_path"] != data["target_path"]
+        or refreshed_candidate != candidate
+        or refreshed_packages != packages
+        or refreshed_plan_steps != plan_steps
+    ):
+        raise PropertyCheckError(
+            "JavaScript promotion changed during isolated verification; "
+            "the test file was not written"
+        )
+
+    destination = project_root / data["target_path"]
+    created_directories: list[Path] = []
+    parent = destination.parent
+    while parent != project_root and not parent.exists():
+        created_directories.append(parent)
+        parent = parent.parent
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    created = False
+    try:
+        with destination.open("x", encoding="utf-8", newline="") as stream:
+            stream.write(refreshed_candidate.source)
+        created = True
+        try:
+            written_status = inspect_git_workspace(project_root)
+        except GitInspectionError as exc:
+            raise PropertyCheckError(
+                f"Unable to verify written JavaScript test with Git: {exc}"
+            ) from exc
+        prefix = (
+            ""
+            if written_status.project_subpath in {None, "."}
+            else f"{written_status.project_subpath}/"
+        )
+        expected_change = f"{prefix}{data['target_path']}"
+        blocking = written_status.blocking_changes
+        if (
+            written_status.head_commit != git_status.head_commit
+            or written_status.repository_fingerprint != git_status.repository_fingerprint
+            or len(blocking) != 1
+            or not blocking[0].untracked
+            or blocking[0].path != expected_change
+        ):
+            raise PropertyCheckError(
+                "Git changes after JavaScript property write are not exactly the new "
+                "test file; the test file was removed"
+            )
+        return _save_apply_result(
+            project_root,
+            result,
+            save_receipt=save_receipt,
+            receipt_output=receipt_output,
+        )
+    except Exception:
+        if created:
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                pass
+        for directory in created_directories:
+            try:
+                directory.rmdir()
+            except OSError:
+                break
+        raise
+
+
+def _save_apply_result(
+    project_root: Path,
+    result: JavaScriptPropertyApplyResult,
+    *,
+    save_receipt: bool,
+    receipt_output: Path | str | None,
+) -> JavaScriptPropertyApplyResult:
+    """Optionally publish a JavaScript apply result without overwriting evidence."""
+
+    if not save_receipt and receipt_output is None:
+        return result
+    if receipt_output is None:
+        receipt_dir = project_root / ".autofix" / "javascript-property-applies"
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        receipt_path = receipt_dir / f"{stamp}.json"
+    else:
+        receipt_path = Path(receipt_output).expanduser().resolve()
+    result = replace(result, receipt_path=receipt_path)
+    _save_apply_receipt(receipt_path, result)
+    return result
+
+
+def _save_apply_receipt(
+    destination: Path, result: JavaScriptPropertyApplyResult
+) -> None:
+    """Atomically publish a complete JavaScript apply receipt without overwrite."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        raise PropertyCheckError(
+            f"JavaScript property apply receipt already exists: {destination}"
+        )
+    payload = json.dumps(result.to_dict(), ensure_ascii=False, indent=2) + "\n"
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            newline="\n",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+            temporary_path = Path(stream.name)
+        os.link(temporary_path, destination)
+        temporary_path.unlink()
+    except OSError as exc:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise PropertyCheckError(
+            f"Unable to publish JavaScript property apply receipt: {exc}"
+        ) from exc
 
 
 def _save_result(

@@ -375,6 +375,9 @@ autofix evaluate-suite examples\complex-validation `
 | `autofix property-js-check CANDIDATE --project . --plan PLAN` | 静态预览 JavaScript/fast-check 候选 | 否 |
 | `autofix property-js-check CANDIDATE --project . --plan PLAN --run` | 在 baseline/fixed 临时副本差分执行 fast-check | 不安装依赖、不写原项目；JSON v2 记录 nested/hoisted 包证据 |
 | `autofix property-js-promote REPORT --project .` | 将已确认 JavaScript 报告转换为 `.mjs` 审核 patch | 仅写 `.autofix/javascript-property-patches/`，不应用 |
+| `autofix property-js-apply PROMOTION --project .` | 预览已认证的 JavaScript 晋升、依赖闭包与验证矩阵 | 否 |
+| `autofix property-js-apply PROMOTION --project . --apply` | 在 detached worktree 复制离线依赖并验证后新增测试 | 只写一个 Git 可见测试；不安装、commit/push |
+| `autofix property-js-apply PROMOTION --project . --apply --output RESULT.json` | 执行闭环并发布 JavaScript 专用 CI 回执 | 指定回执不可覆盖；验证失败不写原工作树 |
 | `autofix init .` | 创建项目配置 | 仅创建配置 |
 | `autofix offline-check .` | 检查断网修复所需资源 | 否 |
 | `autofix run .` | 执行构建/测试并写运行报告 | 否 |
@@ -405,6 +408,7 @@ autofix property-promote --help
 autofix property-apply --help
 autofix property-js-check --help
 autofix property-js-promote --help
+autofix property-js-apply --help
 autofix repair --help
 autofix apply-plan --help
 autofix evaluate-suite --help

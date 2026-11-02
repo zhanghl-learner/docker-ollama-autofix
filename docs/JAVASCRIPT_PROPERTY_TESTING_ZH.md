@@ -75,4 +75,39 @@ autofix property-js-promote `
 git apply --check ".\.autofix\javascript-property-patches\PATCH.patch"
 ```
 
-命令不创建目标测试、不调用 `git apply`、不 commit/push。当前仍不支持 JavaScript 候选的模型生成或 property-apply；人工审核 patch 后如何安全写回属于下一权限阶段，不能复用 Python apply 而跳过 `.mjs` 与依赖证据校验。
+命令不创建目标测试、不调用 `git apply`、不 commit/push。JavaScript 候选仍不支持模型生成；写回必须进入下一节的独立门禁，不能直接调用 `git apply` 跳过 `.mjs` 与依赖证据校验。
+
+## 6. 隔离验证后显式写回
+
+生产修复必须已经逐字应用、提交，且工作区干净。先预览 promotion 绑定的目标、依赖闭包和固定验证矩阵：
+
+```powershell
+autofix property-js-apply `
+  .\my-js-project\.autofix\javascript-property-patches\PROMOTION.json `
+  --project .\my-js-project
+```
+
+确认后才显式应用：
+
+```powershell
+autofix property-js-apply `
+  .\my-js-project\.autofix\javascript-property-patches\PROMOTION.json `
+  --project .\my-js-project `
+  --apply
+```
+
+`--apply` 不在原工作树执行测试。它从当前 HEAD 创建 detached worktree，按 promotion 记录的 nested/hoisted 相对路径复制经过摘要复检的 fast-check 最小依赖闭包，在隔离空间新增候选并依次运行 Node 属性回归和 plan 原验证矩阵。它不执行 npm/yarn/pnpm，也不联网。
+
+仅当验证通过、worktree 成功清理、原仓库 HEAD/指纹/clean 状态未变、promotion 和依赖闭包再次匹配时，AutoFix 才独占创建目标测试。写回后 Git 必须只显示这一个未跟踪文件；若目标被 `.gitignore` 隐藏、出现并发修改、证据漂移或验证失败，则原工作树不保留新测试。成功也不会 commit 或 push。
+
+默认回执保存到 `.autofix/javascript-property-applies/`，遵循 [`autofix-javascript-property-apply` v1](../schemas/autofix-javascript-property-apply-v1.schema.json)。CI 可指定不可覆盖的确定路径：
+
+```powershell
+autofix property-js-apply $env:AUTOFIX_JS_PROMOTION `
+  --project . `
+  --apply `
+  --output .\artifacts\javascript-property-apply.json `
+  --json
+```
+
+`--output` 只能与 `--apply` 同用，不能和 `--no-save` 组合。退出 0 表示验证和唯一写回成功；验证失败沿用失败命令的非零退出码；身份、策略或环境错误退出 2。

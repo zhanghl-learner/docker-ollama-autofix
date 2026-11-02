@@ -212,6 +212,8 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 
 第二十三切片实现 JavaScript confirmed candidate 晋升：`property-js-promote` 只接受完整 v2 confirmed report，重新校验报告身份、候选 bytes、plan diff、两次 baseline/fixed evidence、原矩阵及当前依赖闭包，输出 Git-compatible `.js/.mjs` new-file patch 与 `applied: false` 元数据。默认目标采用 `tests/autofix_property_<sha>.test.mjs`，拒绝覆盖、越界和非测试路径；真实 patch 通过 `git apply --check`。当前不提供 JavaScript property apply，下一阶段先设计 detached-worktree 验证、依赖闭包复检和唯一写回门禁。
 
+第二十四切片实现显式 JavaScript 属性回归落地：`property-js-apply` 默认只预览并重新认证 promotion→report→candidate→plan→dependency closure→patch 全链；`--apply` 要求已提交的干净修复，在 detached worktree 内复制已认证的离线最小依赖闭包，运行 promoted Node 回归与 plan 原矩阵。只有隔离清理、原仓库身份/clean 状态和证据二次复检全部通过才新增目标测试；写回后 Git blocking changes 必须恰好为一个可见 untracked 文件，否则删除。失败回执、确定输出路径和真实 CLI/Node/Git 闭环均纳入测试，且不安装依赖、不 commit/push。下一阶段优先把 Python/JavaScript 两套属性协议抽取为共享状态机与跨平台 CI 契约，减少安全逻辑重复，同时保持语言专用静态边界。
+
 ## 8. 文档维护规则
 
 以后每轮迭代至少检查：

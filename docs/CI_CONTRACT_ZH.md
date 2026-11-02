@@ -112,3 +112,15 @@ v1 固定上述十个顶层字段。未进入构建时 `build` 为 `null`；Git 
 ```
 
 `autofix-property-apply` 与通用 `autofix-ci-result` 是两个独立 schema：前者证明某个已晋升属性测试在固定 Git baseline 的 detached worktree 中通过新回归和 plan 原矩阵，后者描述普通无交互构建。流水线不应把二者混为同一个状态，也不应在 promotion 未经过审核时自动进入 apply job。隔离验证完成后还会重新确认原检出未变化，`property-apply` 成功只留下一个 Git 可见的未提交测试文件；后续 commit/PR 仍是独立权限阶段。
+
+JavaScript 使用独立的 `autofix-javascript-property-apply` v1 回执和命令：
+
+```powershell
+autofix property-js-apply $env:AUTOFIX_JS_PROMOTION `
+  --project . `
+  --apply `
+  --output "${{ runner.temp }}/javascript-property-apply.json" `
+  --json
+```
+
+该回执额外绑定实际复制的离线 fast-check 依赖闭包。job 必须预先提供与 promotion 摘要一致的 `node_modules`；命令不会从 registry 安装依赖。成功仍只留下一个未提交的 JavaScript 测试文件，不能直接赋予流水线 push 权限。
