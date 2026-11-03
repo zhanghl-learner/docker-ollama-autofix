@@ -42,6 +42,12 @@ jobs:
       - name: Verify clean Git workspace contract
         run: autofix git-status . --json --require-clean
 
+      - name: Verify frozen evaluation corpus
+        run: >-
+          autofix benchmark-verify examples/complex-validation
+          --output "${{ runner.temp }}/autofix-benchmark-verification.json"
+          --json
+
       - name: Compile source and tests
         run: python -m compileall -q src tests
 
@@ -74,11 +80,15 @@ jobs:
           name: autofix-ci-${{ runner.os }}
           path: |
             ${{ runner.temp }}/autofix-ci-result.json
+            ${{ runner.temp }}/autofix-benchmark-verification.json
             pytest-results.xml
           if-no-files-found: warn
 
       - name: Validate Python evaluation baseline
         run: autofix evaluate examples/complex-validation/python-order-service --no-save
+
+      - name: Validate pinned upstream Python evaluation baseline
+        run: autofix evaluate examples/complex-validation/python-more-itertools-take --no-save
 
       - name: Validate Node evaluation baseline
         run: autofix evaluate examples/complex-validation/node-checkout-service --no-save
@@ -139,3 +149,5 @@ jobs:
           autofix --version
           autofix inspect . --json
           autofix property-js-apply --help
+          autofix benchmark-verify --help
+          autofix evaluation-trend --help

@@ -1,0 +1,24 @@
+version: 1
+name: autofix-complex-boundary-v1
+cases:
+  - path: node-checkout-service
+    source:
+      kind: synthetic
+      repository: local://docker-ollama-autofix
+      revision: node-checkout-service-v1
+      license: MIT
+    tree_sha256: 5c4908efda6d36915f0d595b1428cd9e583491add2f53c0a68a09b17a322d22e
+  - path: python-order-service
+    source:
+      kind: synthetic
+      repository: local://docker-ollama-autofix
+      revision: python-order-service-v1
+      license: MIT
+    tree_sha256: b173fb4baf1a28809caea2fdcfcb8681250c4a225497b241eba45d0843ed32a0
+  - path: python-more-itertools-take
+    source:
+      kind: upstream
+      repository: https://github.com/more-itertools/more-itertools
+      revision: 4aeb4338ae1407d8da9723e86da99efeb446f719
+      license: MIT
+    tree_sha256: 2d2c8a870c1882339546bf5098793597fec4825dbb975fff30d4052fa85f200b

@@ -1,6 +1,13 @@
 """Public repair-agent API exposed to the command-line layer."""
 
-from autofix.agent.ollama import FileChange, FileEdit, OllamaClient, OllamaError, RepairProposal
+from autofix.agent.ollama import (
+    FileChange,
+    FileEdit,
+    OllamaClient,
+    OllamaError,
+    OllamaModelIdentity,
+    RepairProposal,
+)
 from autofix.agent.diagnostics import RepairEnvironmentError, environment_failure
 from autofix.agent.artifacts import (
     PatchArtifact,
@@ -37,6 +44,7 @@ __all__ = [
     "FileEdit",
     "OllamaClient",
     "OllamaError",
+    "OllamaModelIdentity",
     "PatchArtifact",
     "PlanError",
     "PlanProvenance",

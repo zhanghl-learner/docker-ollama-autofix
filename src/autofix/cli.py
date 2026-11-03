@@ -40,6 +40,12 @@ from autofix.builders import (
     run_build,
     run_build_docker,
 )
+from autofix.benchmark import (
+    BenchmarkError,
+    compare_evaluation_suites,
+    save_benchmark_json,
+    verify_frozen_benchmark,
+)
 from autofix.ci import CIExitCode, CIResult, result_from_build, save_ci_result
 from autofix.detectors import inspect_project
 from autofix.evaluation import (
@@ -1804,6 +1810,152 @@ def evaluate(
         raise typer.Exit(code=1)
 
 
+@app.command("benchmark-verify")
+def benchmark_verify_command(
+    path: Path = typer.Argument(
+        Path("."), exists=True, file_okay=False, resolve_path=True
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        dir_okay=False,
+        resolve_path=True,
+        help="Publish verification JSON at an exact non-existing path.",
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable JSON."
+    ),
+) -> None:
+    """Verify frozen benchmark coverage, provenance, and exact source digests."""
+
+    try:
+        result = verify_frozen_benchmark(path)
+        if output is not None:
+            result = save_benchmark_json(result, output)
+    except (OSError, BenchmarkError) as exc:
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "schema": "autofix-benchmark-verification-error",
+                        "version": 1,
+                        "error": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            console.print(f"[red]Benchmark verification stopped: {exc}[/red]")
+        raise typer.Exit(code=2) from exc
+    if json_output:
+        _json(result.to_dict())
+    else:
+        table = Table(title=f"Frozen benchmark: {result.name}")
+        table.add_column("Case")
+        table.add_column("Source")
+        table.add_column("Revision")
+        table.add_column("Files", justify="right")
+        table.add_column("Status")
+        for case in result.cases:
+            table.add_row(
+                case.relative_path,
+                case.source.kind,
+                case.source.revision,
+                str(case.file_count),
+                "matched" if case.matched else "drifted",
+            )
+        console.print(table)
+        console.print(
+            "[green]Frozen corpus verified.[/green]"
+            if result.passed
+            else "[red]Frozen corpus drift detected.[/red]"
+        )
+        if result.report_path:
+            console.print(f"Report: {result.report_path}")
+    if not result.passed:
+        raise typer.Exit(code=1)
+
+
+@app.command("evaluation-trend")
+def evaluation_trend_command(
+    current: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, resolve_path=True
+    ),
+    baseline: Path = typer.Option(
+        ...,
+        "--baseline",
+        exists=True,
+        dir_okay=False,
+        resolve_path=True,
+        help="Earlier suite.json over the exact same case contracts.",
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        dir_okay=False,
+        resolve_path=True,
+        help="Publish trend JSON at an exact non-existing path.",
+    ),
+    fail_on_regression: bool = typer.Option(
+        False,
+        "--fail-on-regression",
+        help="Exit 1 when any directional quality metric regresses.",
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable JSON."
+    ),
+) -> None:
+    """Compare two suites only when their modes and case contracts match exactly."""
+
+    try:
+        result = compare_evaluation_suites(current, baseline)
+        if output is not None:
+            result = save_benchmark_json(result, output)
+    except (OSError, BenchmarkError) as exc:
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "schema": "autofix-evaluation-trend-error",
+                        "version": 1,
+                        "error": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            console.print(f"[red]Evaluation trend stopped: {exc}[/red]")
+        raise typer.Exit(code=2) from exc
+    if json_output:
+        _json(result.to_dict())
+    else:
+        table = Table(title=f"Evaluation trend: {result.mode}")
+        table.add_column("Metric")
+        table.add_column("Baseline", justify="right")
+        table.add_column("Current", justify="right")
+        table.add_column("Delta", justify="right")
+        table.add_column("Status")
+        for metric in result.metrics:
+            table.add_row(
+                metric.name,
+                f"{metric.baseline:.6f}",
+                f"{metric.current:.6f}",
+                f"{metric.delta:+.6f}",
+                "regressed" if metric.regressed else "ok",
+            )
+        console.print(table)
+        if result.regressions:
+            console.print(
+                "[red]Regressions: " + ", ".join(result.regressions) + "[/red]"
+            )
+        else:
+            console.print("[green]No comparable metric regressed.[/green]")
+        if result.report_path:
+            console.print(f"Report: {result.report_path}")
+    if fail_on_regression and result.regressions:
+        raise typer.Exit(code=1)
+
+
 @app.command("evaluate-suite")
 def evaluate_suite_command(
     path: Path = typer.Argument(
@@ -1873,6 +2025,12 @@ def evaluate_suite_command(
                 )
 
         selected_model = model or (config.ollama_model if config else None)
+        repair_client = OllamaClient(ollama_url) if repair_mode else None
+        model_identity = None
+        if repair_client is not None and selected_model:
+            identity_resolver = getattr(repair_client, "model_identity", None)
+            if callable(identity_resolver):
+                model_identity = identity_resolver(selected_model).to_dict()
         progress_renderer = (
             _SuiteProgressRenderer() if progress and not json_output else None
         )
@@ -1883,17 +2041,18 @@ def evaluate_suite_command(
                 path,
                 timeout_seconds=timeout,
                 save_report=not no_save,
-                client=OllamaClient(ollama_url) if repair_mode else None,
+                client=repair_client,
                 model=selected_model,
                 max_attempts=max_attempts,
                 build_runner=build_runner,
                 runner_name="docker" if docker else "local",
+                model_identity=model_identity,
                 progress_callback=progress_renderer,
             )
         finally:
             if progress_renderer is not None:
                 progress_renderer.close()
-    except (DockerConfigurationError, EvaluationSuiteError) as exc:
+    except (DockerConfigurationError, EvaluationSuiteError, OllamaError) as exc:
         console.print(f"[red]Evaluation suite stopped: {exc}[/red]")
         raise typer.Exit(code=2) from exc
     if json_output:

@@ -342,7 +342,7 @@ autofix evaluate-suite examples\complex-validation `
   --max-attempts 3
 ```
 
-每个有效用例仍通过 `evaluate_project()` 单独进行故障签名 preflight，并在 detached Git worktree 或非 Git 临时副本中修复；原 fixture 不写回。repair 聚合使用 [JSON v3](../schemas/autofix-evaluation-suite-v3.schema.json)，在 v2 的模型、runner、尝试次数和修复率指标上增加上下文召回率、Top-5 召回率、必改文件平均排名、发送文件/字符数、截断率和 fallback 比例；历史 v2 schema 保留，baseline 继续使用 JSON v1。终端表格后的 `Failed case details` 显示完整失败摘要；逐用例 JSON 的 `evaluation.repair_details` 保存 proposal、静态拒绝和每轮验证失败的 diagnosis、diff、构建步骤与完整输出；Markdown 展开同样证据，但单段 diff/输出最多展示 4000 字符，完整内容以 JSON 为准。`--docker` 模式要求所有用例共享一个明确的 `--docker-image` 或套件级配置镜像；当前不会为混合语言用例自动切换多个镜像。
+每个有效用例仍通过 `evaluate_project()` 单独进行故障签名 preflight，并在 detached Git worktree 或非 Git 临时副本中修复；原 fixture 不写回。repair 聚合使用 [JSON v4](../schemas/autofix-evaluation-suite-v4.schema.json)：保留 v3 的上下文召回/成本指标，并增加本地 Ollama 模型 digest、格式、family、参数规模、量化级别及 Python/OS/架构身份；历史 v2/v3 schema 保留，baseline 继续使用 JSON v1。终端表格后的 `Failed case details` 显示完整失败摘要；逐用例 JSON 的 `evaluation.repair_details` 保存 proposal、静态拒绝和每轮验证失败的 diagnosis、diff、构建步骤与完整输出；Markdown 展开同样证据，但单段 diff/输出最多展示 4000 字符，完整内容以 JSON 为准。`--docker` 模式要求所有用例共享一个明确的 `--docker-image` 或套件级配置镜像；当前不会为混合语言用例自动切换多个镜像。
 
 上下文召回以清单的 `required_change_paths` 为真值，只统计实际形成首轮上下文的 repair 用例。`required_context_recall` 表示必改路径是否进入首轮上下文，Top-5 指标进一步检查它是否足够靠前；多轮累计的 `context_files_sent` 与 `context_chars_sent` 用于估算模型输入成本。它们衡量检索质量，不代表模型一定能生成正确修改。
 
@@ -390,6 +390,9 @@ autofix evaluate-suite examples\complex-validation `
 | `autofix evaluate-suite PATH` | 批量执行评测故障基线并保存聚合证据 | 否 |
 | `autofix evaluate-suite PATH --repair --model MODEL` | 隔离执行批量模型修复并聚合计分 | 否 |
 | `autofix evaluate-suite PATH --repair --no-progress ...` | 关闭 spinner 和中间里程碑，仍保留最终人类报告 | 否 |
+| `autofix benchmark-verify PATH` | 验证评测清单覆盖、来源元数据和源码树摘要 | 否；可选写不可覆盖 JSON 回执 |
+| `autofix evaluation-trend CURRENT --baseline PREVIOUS` | 仅在 mode 和 case contract 完全相同时比较指标 | 否 |
+| `autofix evaluation-trend CURRENT --baseline PREVIOUS --fail-on-regression` | 方向性质量指标退化时返回 1 | 否；适合 CI 门禁 |
 | `autofix history .` | 查看修复历史 | 否 |
 | `autofix undo .` | 撤销最近一次尚未撤销的成功修复 | 是；先备份当前版本 |
 | `autofix rollback REPORT --project .` | 按指定报告撤销 | 是；先备份当前版本 |
@@ -412,6 +415,8 @@ autofix property-js-apply --help
 autofix repair --help
 autofix apply-plan --help
 autofix evaluate-suite --help
+autofix benchmark-verify --help
+autofix evaluation-trend --help
 autofix ci-check --help
 autofix bundle --help
 ```
@@ -420,6 +425,7 @@ autofix bundle --help
 
 属性测试候选的 preview、双版本验证、verdict 和 JSON v1 契约，见[属性测试候选协议](PROPERTY_TESTING_ZH.md)。
 JavaScript/fast-check 的声明式离线依赖闭包和差分边界，见[JavaScript 属性候选协议](JAVASCRIPT_PROPERTY_TESTING_ZH.md)。
+冻结用例来源、源码树摘要以及同构 suite 趋势门禁，见[冻结评测基准与趋势比较](BENCHMARKING_ZH.md)。
 
 ### CI 无交互验证
 

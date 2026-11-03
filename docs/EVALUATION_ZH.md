@@ -142,7 +142,7 @@ autofix evaluate-suite examples\complex-validation `
   --max-attempts 3
 ```
 
-每个清单先独立匹配 `expected_failure`，不匹配时该用例的模型调用数保持为 0。匹配后复用单用例的 detached Git worktree/临时副本、路径策略、精确旧文本、破坏性检查与完整验证矩阵；无论成功或失败都不写回 fixture。repair 聚合遵循 [`autofix-evaluation-suite` v3 schema](../schemas/autofix-evaluation-suite-v3.schema.json)；历史 v2 schema 保留用于读取旧报告。v3 包含 `autofix_version`、`model`、`runner`、`max_attempts` 和以下指标：
+每个清单先独立匹配 `expected_failure`，不匹配时该用例的模型调用数保持为 0。匹配后复用单用例的 detached Git worktree/临时副本、路径策略、精确旧文本、破坏性检查与完整验证矩阵；无论成功或失败都不写回 fixture。repair 聚合遵循 [`autofix-evaluation-suite` v4 schema](../schemas/autofix-evaluation-suite-v4.schema.json)；历史 v2/v3 schema 保留用于读取旧报告。v4 包含 `autofix_version`、模型 digest/量化元数据、`runner`、运行环境、`max_attempts` 和以下指标：
 
 | 指标 | 含义 |
 | --- | --- |
@@ -202,6 +202,10 @@ repair 用例失败不一定存在异常：候选可能通过全部静态门禁�
 
 `context_selections` 只记录路径、选择原因、测试属性、发送字符数和截断状态，不重复保存源码内容。对比两个版本时可以检查必改文件是否进入上下文、排序是否提前以及字符预算是否减少；只有在相同 `case.name`、`contract_sha256`、模型和 runner 下，才应把成功率变化归因于上下文策略。
 
+### 6.3 冻结输入与趋势门禁
+
+`autofix-benchmark.yml` 可以把套件发现到的每个用例绑定到来源、revision、license 和完整源码树摘要；`autofix benchmark-verify` 在评测前阻断未声明用例与任意字节 drift。当前包含两个 synthetic 用例和一个固定到 `more-itertools` 完整 commit 的真实上游用例。`autofix evaluation-trend` 在评测后要求两份 suite 的 mode、`relative_root → contract_sha256`、模型 digest/量化身份、runner、尝试上限与运行环境完全一致，并在输出中绑定两份 suite SHA-256。详细格式、命令和退出码见[冻结评测基准与趋势比较](BENCHMARKING_ZH.md)。
+
 后续评测工作按以下顺序推进：
 
 1. [x] 实现一次运行多个清单的 baseline 聚合命令，保留每个原始结果并固定 JSON schema v1；
@@ -209,7 +213,7 @@ repair 用例失败不一定存在异常：候选可能通过全部静态门禁�
 3. 每个主要生态至少加入基础、跨文件和环境门禁三类用例，并保留模型不能解决的用例；
 4. 增加来自真实开源仓库的最小化、许可兼容故障，同时记录上游来源和简化过程；
 5. 在 CI 中运行不调用真实模型的契约/安全回归；真实模型评测单独运行并记录硬件、模型 digest、工具链和日期；
-6. 比较版本时要求 `case.name` 与 `contract_sha256` 均一致，避免把清单变化误判为能力提升。
+6. [x] 比较版本时要求完整 case 路径与 `contract_sha256` 集合一致，保存 suite 摘要和运行身份，避免把清单变化误判为能力提升。
 
 聚合报告必须同时展示失败和拒绝，不能只展示成功案例。达到多语言、重复运行和版本回归的最低规模前，项目对外表述应使用“工程原型/内部试用”，而不是“可无人值守修复任意项目”。
 
@@ -225,4 +229,4 @@ repair 用例失败不一定存在异常：候选可能通过全部静态门禁�
 | D | Rust | module/trait、Cargo offline、borrow/type errors |
 | E | Python/Node advanced | async、类型检查、锁定依赖、lint/format gate |
 
-模型 repair 聚合已经实现，跨版本排行榜和模型 digest 尚未实现。比较结果时必须同时使用 `case.name + contract_sha256 + model + runner`，不要把 baseline suite 通过率当作模型成功率，也不要只比较“最终是否通过”；越界修改与缺失必改文件同样是失败。具体版本里程碑见[开发路线图](ROADMAP_ZH.md)。
+模型 repair 聚合、Ollama digest/量化/运行环境身份和同构 suite 趋势门禁已经实现；持久排行榜、容器镜像 digest 与编译器工具链身份尚未实现。不要把 baseline suite 通过率当作模型成功率，也不要只比较“最终是否通过”；越界修改与缺失必改文件同样是失败。具体版本里程碑见[开发路线图](ROADMAP_ZH.md)。

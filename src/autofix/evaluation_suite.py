@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 import shutil
+import sys
 import tempfile
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -26,7 +28,7 @@ from autofix.evaluation import (
 
 SUITE_SCHEMA = "autofix-evaluation-suite"
 BASELINE_SUITE_VERSION = 1
-REPAIR_SUITE_VERSION = 3
+REPAIR_SUITE_VERSION = 4
 _IGNORED_DIRECTORIES = {
     ".autofix",
     ".git",
@@ -167,6 +169,8 @@ class EvaluationSuiteResult:
     runner: str = "local"
     max_attempts: int | None = None
     autofix_version: str = __version__
+    model_identity: dict[str, Any] | None = None
+    runtime_identity: dict[str, str] | None = None
     report_dir: Path | None = None
     json_report_path: Path | None = None
     markdown_report_path: Path | None = None
@@ -303,6 +307,8 @@ class EvaluationSuiteResult:
                     "runner": self.runner,
                     "max_attempts": self.max_attempts,
                     "autofix_version": self.autofix_version,
+                    "model_identity": self.model_identity,
+                    "runtime_identity": self.runtime_identity,
                 }
             )
         return payload
@@ -460,8 +466,14 @@ def _markdown(result: EvaluationSuiteResult) -> str:
         lines.extend(
             [
                 f"- Model: `{result.model}`",
+                f"- Model digest: `{(result.model_identity or {}).get('digest') or 'unresolved'}`",
+                f"- Quantization: `{(result.model_identity or {}).get('quantization_level') or 'unknown'}`",
                 f"- Runner: `{result.runner}`",
                 f"- Maximum attempts per case: **{result.max_attempts}**",
+                f"- Runtime: `{(result.runtime_identity or {}).get('implementation', 'unknown')} "
+                f"{(result.runtime_identity or {}).get('python', 'unknown')} / "
+                f"{(result.runtime_identity or {}).get('system', 'unknown')} "
+                f"{(result.runtime_identity or {}).get('machine', 'unknown')}`",
                 f"- First-attempt pass rate: **{metrics['first_attempt_pass_rate']:.2%}**",
                 f"- Average attempts: **{metrics['average_attempts']:.3f}**",
                 f"- Static rejection rate: **{metrics['static_rejection_rate']:.2%}**",
@@ -602,6 +614,7 @@ def evaluate_suite(
     max_attempts: int = 3,
     build_runner: Callable[..., BuildResult] = run_build,
     runner_name: str = "local",
+    model_identity: dict[str, Any] | None = None,
     progress_callback: EvaluationSuiteProgressCallback | None = None,
 ) -> EvaluationSuiteResult:
     """Run every contract in baseline or isolated repair mode and retain outcomes."""
@@ -617,6 +630,27 @@ def evaluate_suite(
         raise EvaluationSuiteError("runner_name must be 'local' or 'docker'")
     if mode == "repair" and not selected_model:
         raise EvaluationSuiteError("A model is required for repair evaluation")
+    resolved_model_identity = None
+    runtime_identity = None
+    if mode == "repair":
+        resolved_model_identity = dict(model_identity or {})
+        resolved_model_identity.setdefault("name", selected_model)
+        for key in (
+            "digest",
+            "format",
+            "family",
+            "parameter_size",
+            "quantization_level",
+        ):
+            resolved_model_identity.setdefault(key, None)
+        runtime_identity = {
+            "python": platform.python_version(),
+            "implementation": platform.python_implementation(),
+            "system": platform.system(),
+            "release": platform.release(),
+            "machine": platform.machine(),
+            "executable": Path(sys.executable).name,
+        }
     case_roots = discover_evaluation_cases(suite_root)
     if not case_roots:
         raise EvaluationSuiteError(
@@ -750,6 +784,8 @@ def evaluate_suite(
         model=selected_model,
         runner=runner_name,
         max_attempts=max_attempts if mode == "repair" else None,
+        model_identity=resolved_model_identity,
+        runtime_identity=runtime_identity,
     )
     if save_report:
         try:

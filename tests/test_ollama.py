@@ -13,6 +13,40 @@ from autofix.agent.ollama import (
 )
 
 
+def test_resolves_model_digest_and_quantization_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "models": [
+                    {
+                        "name": "qwen2.5-coder:7b",
+                        "digest": "a" * 64,
+                        "details": {
+                            "format": "gguf",
+                            "family": "qwen2",
+                            "parameter_size": "7.6B",
+                            "quantization_level": "Q4_K_M",
+                        },
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(
+        "autofix.agent.ollama.httpx.get", lambda *_args, **_kwargs: Response()
+    )
+
+    identity = OllamaClient().model_identity("qwen2.5-coder:7b")
+
+    assert identity.digest == "a" * 64
+    assert identity.quantization_level == "Q4_K_M"
+    assert identity.to_dict()["parameter_size"] == "7.6B"
+
+
 def test_validates_structured_line_edit_proposal() -> None:
     proposal = validate_proposal(
         {

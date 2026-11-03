@@ -134,6 +134,7 @@ src/autofix/
 ├── ci.py                   # CI schema v1、状态分类、固定退出码与原子结果写入
 ├── config.py               # 用户级/项目级 YAML 合并与校验
 ├── evaluation.py           # 评测契约、隔离 repair 计分与 JSON 报告
+├── benchmark.py            # 冻结语料身份、树摘要与同构 suite 趋势
 ├── models.py               # BuildStep、ProjectMatch、ProjectInspection
 ├── repository.py           # 只读 Git 身份、porcelain 状态与策略
 ├── static_analysis.py      # 声明式静态分析器发现、可用性与固定命令
@@ -175,6 +176,8 @@ src/autofix/
 ### 3.2 评测层不是另一套修复器
 
 `evaluation.py` 复用 `BuildStep`、`run_build`、`repair_project` 与 Docker runner，不复制 repair 算法。它只增加一个外部验收契约：用例必须在声明的步骤以预期退出码和输出特征稳定失败；模型修复必须通过原命令矩阵；最终变更路径必须落在 `allowed_change_paths` 内；`required_change_paths` 必须全部命中。
+
+`benchmark.py` 位于评测之前和之后，但不参与修复：之前严格核对 `autofix-benchmark.yml` 是否完整声明所有用例，并以相对路径、长度和原始 bytes 形成有界源码树摘要；之后只在 mode 和 `relative_root → contract_sha256` 集合完全一致时比较方向性指标。这样可以阻止用例内容、故障契约或题集发生变化后仍把 pass-rate 差值解释为能力趋势。
 
 ```mermaid
 flowchart LR
@@ -265,9 +268,9 @@ flowchart LR
     STAGE --> PUBLISH[原子发布 suite.json / suite.md / cases]
 ```
 
-单个用例的解析或执行失败只改变该用例状态，不中断其余用例；重复 `case.name` 会把所有冲突项标记为失败。只有根目录无清单、repair 缺少模型或聚合报告无法发布才属于套件级错误。`autofix-evaluation-suite` v1 固定为 `mode=baseline`；历史 v2 repair schema 记录候选质量，当前 v3 在同一 repair 外层契约上增加上下文检索和成本指标。失败异常携带内存态 `RepairResult`，因此 `--no-save` 不依赖读取临时 repair JSON 也能聚合拒绝和验证失败。
+单个用例的解析或执行失败只改变该用例状态，不中断其余用例；重复 `case.name` 会把所有冲突项标记为失败。只有根目录无清单、repair 缺少模型或聚合报告无法发布才属于套件级错误。`autofix-evaluation-suite` v1 固定为 `mode=baseline`；历史 v2 repair schema 记录候选质量，v3 增加上下文检索和成本指标，当前 v4 再绑定模型内容与运行环境身份。失败异常携带内存态 `RepairResult`，因此 `--no-save` 不依赖读取临时 repair JSON 也能聚合拒绝和验证失败。
 
-v3 case 的外层字段继续复用 v2，失败摘要仍使用 `error`；完整证据放入开放的 `evaluation.repair_details`。版本提升只因为严格 `metrics` 对象增加了必需字段，避免悄悄破坏 v2 schema。终端通过 `EvaluationSuiteCase.failure_summary` 区分契约不匹配、环境/模型错误、静态拒绝、验证失败和范围失败。JSON 不截断；Markdown 只截断超长展示片段，避免单份编译日志淹没整套报告。
+v4 case 的外层字段继续复用 v3，失败摘要仍使用 `error`；完整证据放入开放的 `evaluation.repair_details`。新增 `model_identity` 保存 Ollama digest、模型格式、family、参数规模和量化级别，`runtime_identity` 保存 Python 实现/版本、OS/release、machine 与解释器名称。终端通过 `EvaluationSuiteCase.failure_summary` 区分契约不匹配、环境/模型错误、静态拒绝、验证失败和范围失败。JSON 不截断；Markdown 只截断超长展示片段，避免单份编译日志淹没整套报告。
 
 修复状态机通过可选 `RepairProgressCallback` 发出 `initial_verification_*`、`model_waiting`、`proposal_received/rejected`、`verification_started/failed`、`repair_succeeded/exhausted` 等不可变事件；回调只观察已有状态，不参与接受决策。套件将其包装为带用例序号和相对路径的 `EvaluationSuiteProgressEvent`。CLI renderer 在阻塞的模型请求和构建期间维护 Rich spinner，在状态边界停止 spinner 并写入持久终端行。`--json` 不注册 renderer，因此机器输出不会混入日志。
 
@@ -438,7 +441,7 @@ JavaScript promotion 是独立、无应用权限的消费者：它只接受完�
 
 每个实际入选文件都生成 `ContextSelection`：记录项目相对路径、`build-output` / `local-import:<来源>` / `project-source-fallback` 原因、测试属性、发送字符数和是否截断。repair report 按 attempt 保存这些不含源码正文的元数据；套件终端在请求模型前显示前六项。模型提示也收到同一原因列表，但它只用于相关性说明，不授予编辑权限。
 
-repair suite JSON v3 把这些记录聚合为检索质量与成本指标。首轮上下文和清单 `required_change_paths` 计算 required-path recall、Top-5 recall 与平均命中排名；所有尝试累计文件数、字符数、截断与 fallback。v1 baseline、历史 v2 repair schema 保持不变，因此旧报告不会被新字段重新解释。
+repair suite JSON v3 把这些记录聚合为检索质量与成本指标；v4 保持指标不变并增加可比较运行身份。首轮上下文和清单 `required_change_paths` 计算 required-path recall、Top-5 recall 与平均命中排名；所有尝试累计文件数、字符数、截断与 fallback。v1 baseline、历史 v2/v3 repair schema 保持不变，因此旧报告不会被新字段重新解释。
 
 上下文收集入口会先将项目根路径规范化，再处理目录遍历结果和构建输出中的文件路径。这用于统一 Windows 8.3 短路径（例如 `RUNNER~1`）与长路径所指向的同一目录；随后仍以解析后的候选路径执行根目录包含检查，因此路径别名兼容不会放宽项目边界或允许读取项目外文件。
 

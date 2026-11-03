@@ -85,6 +85,30 @@ class RepairProposal:
 
 
 @dataclass(frozen=True)
+class OllamaModelIdentity:
+    """Immutable local model identity reported by Ollama's tag registry."""
+
+    name: str
+    digest: str
+    format: str | None = None
+    family: str | None = None
+    parameter_size: str | None = None
+    quantization_level: str | None = None
+
+    def to_dict(self) -> dict[str, str | None]:
+        """Return the stable fields embedded in evaluation evidence."""
+
+        return {
+            "name": self.name,
+            "digest": self.digest,
+            "format": self.format,
+            "family": self.family,
+            "parameter_size": self.parameter_size,
+            "quantization_level": self.quantization_level,
+        }
+
+
+@dataclass(frozen=True)
 class PropertyCandidateProposal:
     """Schema-constrained Hypothesis candidate returned by a local model."""
 
@@ -117,15 +141,62 @@ class OllamaClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
-    def list_models(self) -> list[str]:
-        """Return locally installed Ollama model names."""
+    def _model_records(self) -> list[dict[str, Any]]:
+        """Return validated raw model records from the local tag registry."""
 
         try:
             response = httpx.get(f"{self.base_url}/api/tags", timeout=5)
             response.raise_for_status()
-            return [item["name"] for item in response.json().get("models", []) if item.get("name")]
+            records = response.json().get("models", [])
+            if not isinstance(records, list):
+                raise ValueError("models is not a list")
+            return [item for item in records if isinstance(item, dict)]
         except (httpx.HTTPError, ValueError, KeyError) as exc:
             raise OllamaError(f"Unable to query Ollama models: {exc}") from exc
+
+    def list_models(self) -> list[str]:
+        """Return locally installed Ollama model names."""
+
+        return [
+            item["name"]
+            for item in self._model_records()
+            if isinstance(item.get("name"), str) and item["name"]
+        ]
+
+    def model_identity(self, model: str) -> OllamaModelIdentity:
+        """Resolve a model tag to its content digest and quantization metadata."""
+
+        requested = model.strip()
+        aliases = {requested}
+        if ":" not in requested:
+            aliases.add(f"{requested}:latest")
+        for item in self._model_records():
+            name = item.get("name") or item.get("model")
+            if not isinstance(name, str) or name not in aliases:
+                continue
+            digest = item.get("digest")
+            if (
+                not isinstance(digest, str)
+                or len(digest) != 64
+                or any(char not in "0123456789abcdefABCDEF" for char in digest)
+            ):
+                raise OllamaError(f"Ollama returned an invalid digest for model {name}")
+            details = item.get("details")
+            details = details if isinstance(details, dict) else {}
+
+            def optional_text(key: str) -> str | None:
+                value = details.get(key)
+                return value if isinstance(value, str) and value else None
+
+            return OllamaModelIdentity(
+                name=name,
+                digest=digest.lower(),
+                format=optional_text("format"),
+                family=optional_text("family"),
+                parameter_size=optional_text("parameter_size"),
+                quantization_level=optional_text("quantization_level"),
+            )
+        raise OllamaError(f"Ollama model is not installed: {requested}")
 
     def propose(
         self,

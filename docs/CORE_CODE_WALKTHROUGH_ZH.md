@@ -12,6 +12,7 @@ cli.py
  ├─ builders/docker.py        Docker 执行
  ├─ repository.py             Git 身份、门禁和 worktree
  ├─ property_apply.py         属性回归共享写入与回执安全原语
+ ├─ benchmark.py              冻结评测输入与 suite 趋势比较
  └─ agent/repair.py           修复状态机
      ├─ context.py            选择有限上下文
      ├─ ollama.py             模型协议
@@ -29,6 +30,10 @@ cli.py
 `promote_javascript_property_candidate()` 是后置只读证据消费者，只生成未应用 new-file patch；`apply_javascript_property_promotion()` 则重新认证 report/candidate/plan/dependencies/patch，要求干净且已提交的修复，在 detached worktree 中复制最小依赖闭包并执行候选与原矩阵。只有清理、原仓库复检和证据复检均通过后才新增一个 Git 可见测试，失败不写回，成功也不 commit/push。JavaScript 全程使用独立 schema 和目标规则，避免继承 Python 流程的隐式权限。
 
 两种语言的 apply 不再分别实现高权限文件操作。`property_apply.py` 提供 reviewed plan 当前状态认证、唯一 Git 变更判断、默认回滚的新文件上下文管理器和不可覆盖 JSON 发布；语言模块只负责组装自身候选与证据。这一边界使安全规则可以由同一组单元测试约束。
+
+`benchmark.py` 不调用 `repair_project()`：`verify_frozen_benchmark()` 先验证清单覆盖与每个用例的来源/树摘要；`compare_evaluation_suites()` 再验证两份 suite 的 mode、contract 集合、模型 digest/量化身份、runner 和运行环境，最后才计算有明确好坏方向的指标差值。输入不一致属于不可比较错误，而不是零分或回归。
+
+`OllamaClient.model_identity()` 从本机 `/api/tags` 精确解析已选模型，要求 64 位内容 digest，并保留 GGUF 格式、family、parameter size 与 quantization level。`evaluate_suite()` 把这些字段和 Python/系统/架构身份写入 repair suite v4；模型请求和修复判定仍使用原来的 schema 与隔离状态机，身份采集不扩大写权限。
 
 同一模块的 `generate_property_candidate()` 调用 Ollama 的独立候选 schema，只把通过 AST/副作用边界的源码保存为 `.autofix` 审核工件。生成和执行是两个命令，模型没有直接调用 runner 或写项目测试树的能力。
 

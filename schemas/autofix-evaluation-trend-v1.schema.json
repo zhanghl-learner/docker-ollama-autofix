@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zhanghl-learner/docker-ollama-autofix/blob/main/schemas/autofix-evaluation-trend-v1.schema.json",
+  "title": "AutoFix Evaluation Trend v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "version", "baseline_path", "current_path", "baseline_sha256",
+    "current_sha256", "mode", "case_set_sha256", "baseline_identity",
+    "current_identity", "passed", "regressions", "metrics", "report_path"
+  ],
+  "properties": {
+    "schema": {"const": "autofix-evaluation-trend"},
+    "version": {"const": 1},
+    "baseline_path": {"type": "string", "minLength": 1},
+    "current_path": {"type": "string", "minLength": 1},
+    "baseline_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "current_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "mode": {"enum": ["baseline", "repair"]},
+    "case_set_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "baseline_identity": {"$ref": "#/$defs/identity"},
+    "current_identity": {"$ref": "#/$defs/identity"},
+    "passed": {"type": "boolean"},
+    "regressions": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "metrics": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/metric"}},
+    "report_path": {"type": ["string", "null"]}
+  },
+  "$defs": {
+    "identity": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "model", "model_identity", "runner", "runtime_identity",
+        "max_attempts", "autofix_version"
+      ],
+      "properties": {
+        "model": {"type": ["string", "null"]},
+        "model_identity": {"type": ["object", "null"]},
+        "runner": {"type": ["string", "null"]},
+        "runtime_identity": {"type": ["object", "null"]},
+        "max_attempts": {"type": ["integer", "null"]},
+        "autofix_version": {"type": ["string", "null"]}
+      }
+    },
+    "metric": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "baseline", "current", "delta", "direction", "regressed"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "baseline": {"type": "number"},
+        "current": {"type": "number"},
+        "delta": {"type": "number"},
+        "direction": {"enum": ["higher", "lower"]},
+        "regressed": {"type": "boolean"}
+      }
+    }
+  }
+}

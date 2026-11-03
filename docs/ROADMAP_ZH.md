@@ -216,6 +216,10 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 
 第二十五切片完成属性 apply 安全原语收敛：新增无模型、无 runner 的 `property_apply.py`，统一 reviewed plan 精确匹配、HEAD/仓库指纹/唯一 untracked 目标检查、默认回滚的独占文件创建，以及 fsync 后不可覆盖的 JSON 发布；Python 与 JavaScript 保留各自候选和 evidence 认证，但不再复制高权限写回代码。Windows/Linux CI 显式固定 Node 22，并单列真实 fast-check 差分及 JavaScript CLI/worktree 闭环。下一阶段应引入真实开源仓库的冻结基准清单和可比较趋势报告，优先量化可靠性而非继续扩大写权限。
 
+第二十六切片建立冻结基准与趋势协议：`benchmark-verify` 要求清单完整覆盖所有 `autofix-eval.yml` 用例，记录 synthetic/upstream 来源、revision、license，并以有界无符号链接的源码树摘要阻止 fixture 静默漂移；`evaluation-trend` 仅在 mode 与 `relative_root → contract_sha256` 集合完全一致时比较有方向性的质量指标，可通过 `--fail-on-regression` 作为 CI 门禁。复杂边界套件先以两个 synthetic 用例验证协议，文档明确不得冒充真实上游样本。下一阶段将加入首批许可证审核、固定 commit 的 upstream fixture，并补齐模型/量化/运行环境身份，避免把运行条件差异误判为算法趋势。
+
+第二十七切片加入首个真实上游冻结样本：`more-itertools` v11.2.1 的 `take()` 固定到完整 commit `4aeb4338ae1407d8da9723e86da99efeb446f719`，保留 MIT 许可证、最小提炼说明和独立故障注入记录，评测仍完全离线。repair suite 升级为 v4，自动从本地 Ollama `/api/tags` 绑定模型内容 digest、格式、模型族、参数规模和量化级别，并记录 Python/OS/架构；趋势比较拒绝模型、runner、尝试上限或运行身份不同的输入。下一阶段应增加第二个不同许可证/语言的上游样本、生成可版本化的历史基线，并研究容器镜像 digest 与编译器版本身份。
+
 ## 8. 文档维护规则
 
 以后每轮迭代至少检查：

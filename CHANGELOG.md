@@ -24,6 +24,10 @@
 - 新增 `property-js-promote` 与严格 promotion schema v1：把完整 confirmed JavaScript v2 evidence 转为未应用 `.mjs` new-test patch，并绑定报告、候选、plan、依赖闭包和 patch 摘要。
 - 新增 `property-js-apply` 与严格 apply schema v1：默认预览，显式 `--apply` 在 detached worktree 验证 Node 属性回归和 plan 原矩阵，再安全新增唯一测试文件。
 - JavaScript apply 回执支持默认审计目录、`--no-save` 和不可覆盖的 `--output` CI 路径，并记录 baseline commit、离线依赖闭包、固定 argv、BuildResult 与回滚状态。
+- 新增 `benchmark-verify`、冻结 `autofix-benchmark.yml` 清单与 JSON schema v1：完整绑定用例来源、revision、license 和有界源码树 SHA-256。
+- 新增 `evaluation-trend` 与 JSON schema v1：只比较 mode 和 case contract 集合完全一致的 suite，并支持方向性回归 CI 退出码。
+- 冻结基准新增首个真实上游用例：从 `more-itertools` v11.2.1 的精确 Git commit 提炼 `take()`，保留 MIT 许可证、裁剪说明和显式故障注入记录。
+- repair suite 升级为 JSON v4：记录 Ollama 模型内容 digest、格式、模型族、参数规模、量化级别，以及 Python/操作系统/机器架构运行身份；历史 v1-v3 schema 保留。
 - 新增严格的 repair suite JSON schema v3；聚合 required-path context recall、Top-5 recall、平均命中排名、累计文件/字符、截断率和 fallback 比例，v1 baseline 与历史 v2 repair schema 保留。
 - 终端和 suite Markdown 展示上下文召回、排名与发送规模，使“上下文未命中”和“模型生成失败”可以分别诊断。
 - 新增可审计的 `SourceContext` / `ContextSelection`：从构建输出直接路径出发，有界遍历 Python（含包重导出和唯一模块后缀的 `src/` 布局）、JavaScript/TypeScript 与 C/C++ 本地依赖，并记录选择原因、测试属性、字符数和截断状态。
@@ -56,6 +60,7 @@
 ### Changed
 
 - Python 与 JavaScript 属性 apply 共用 reviewed plan 认证、唯一 Git 目标检查、默认回滚文件创建和不可覆盖回执发布原语，减少高权限安全逻辑分叉。
+- `evaluation-trend` 除题集契约外还要求模型、digest/量化元数据、runner、尝试上限和运行环境身份一致，拒绝把运行条件变化报告为算法回归。
 - `property-apply` 的候选回归与 plan 验证从真实项目迁移到当前 HEAD 的 detached worktree；只有隔离清理和原仓库复检全部成功才写入目标测试。
 - 上下文排序从“生产文件统一优先”升级为“错误输出直达生产文件→直达文件的本地生产依赖→直达测试→其余有界源码”，以在固定字符预算内减少无关文件竞争。
 - 模型提示新增通用可达性规则：若 guard 排除失败输入，应修改 guard 或更早控制流；禁止在 predicate 已由外层分支保证时添加等价内层条件。
@@ -75,6 +80,8 @@
 - fast-check 闭包按请求包 nested→项目 hoisted 顺序解析，保留多版本相对布局；必需依赖缺失或名称越界会在执行前停止，缺失 optional dependency 不冒充环境失败。
 - JavaScript 晋升只生成 review artifact，不写测试树、不运行 Node、不调用 Git apply；证据残缺、候选或依赖漂移、越界/覆盖目标均拒绝。
 - JavaScript 属性应用要求干净且已有 HEAD 的仓库、当前生产修复逐字匹配 plan，并在写回前后复检 promotion 全摘要链、依赖闭包和 Git 身份；验证失败、ignored 目标、并发漂移或额外变更均不在原工作树保留测试。
+- 冻结基准拒绝未声明/缺失用例、重复或越界路径、符号链接、超限树和摘要漂移；趋势比较拒绝不同 mode、不同 case contract 或非数字指标，不把异构题集差异报告为能力变化。
+- 上游 fixture 必须使用 HTTPS 仓库地址与完整 Git commit，随附许可证和提炼/故障注入说明；运行验证不克隆仓库、不联网，也不修改上游源码。
 - 上下文枚举使用可剪枝目录遍历，不进入依赖、缓存、构建产物或符号链接目录；import 图只在已枚举项目源码内解析并设节点上限，歧义模块不猜测。
 - 脏 Git 仓库和尚无 commit 的仓库在构建、Ollama 请求和源码修改前停止；AutoFix 不自动 stash、clean、commit、push 或 merge，只有显式 `--commit` 才能在验证后创建本地提交。
 - worktree 在成功、验证失败、模型异常和 `KeyboardInterrupt` 后定向移除；清理失败不会自动全局 prune，以免影响用户的其他 worktree。
@@ -86,12 +93,13 @@
 ### CI
 
 - Windows/Linux 测试显式固定 Node 22，并单独运行真实 fast-check 差分和 JavaScript apply CLI/worktree 契约，不依赖 runner 偶然预装的 Node。
+- Windows/Linux CI 在评测前验证冻结语料、单独复现固定上游故障契约并上传 benchmark JSON 证据；wheel smoke 同时检查两个新命令入口。
 - Windows/Linux 测试任务在编译和 pytest 前验证干净 Git 检出契约。
 - Windows/Linux pytest 改由 `autofix ci-check` 执行，并通过 `actions/upload-artifact@v7` 始终上传 JSON/JUnit 证据；workflow 不调用模型或自动修改仓库。
 
 ### Verified
 
-- Windows 本机 312 项 pytest、`compileall`、Python/Node 复杂 fixture 基线与聚合套件、实时进度/终端 diff、语义重试、静态分析绑定、Python 与 JavaScript 属性差分/晋升、隔离应用与失败回滚检查通过。
+- Windows 本机 324 项 pytest、`compileall`、16 份 JSON schema、三个复杂 fixture 基线与聚合套件、冻结清单/趋势/模型身份门禁、实时进度/终端 diff、语义重试、静态分析绑定、Python 与 JavaScript 属性差分/晋升、隔离应用与失败回滚检查通过。
 - 独立 CLI 子进程在真实临时 Git 仓库执行 property apply，两步 pytest 验证通过，确定路径回执与 stdout JSON 完全一致；目标冲突回归确认新测试被撤销。
 - 使用真实 Node test runner 和离线 fast-check fixture 完成 JavaScript 稳定反例与修复双版本闭环；TAP 毫秒耗时在失败签名中规范化，避免把运行时间抖动误判为反例不稳定。
 - hoisted 与 fast-check 内嵌两种 pure-rand 布局均通过真实 Node 差分闭环；v2 证据准确区分两个安装相对位置并保存 manifest digest。
