@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -14,10 +15,33 @@ from autofix.evaluation_suite import (
     EvaluationSuiteProgressEvent,
     discover_evaluation_cases,
     evaluate_suite,
+    _toolchain_identity,
 )
 
 
 runner = CliRunner()
+
+
+def test_toolchain_identity_is_language_scoped_and_deterministic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "autofix.evaluation_suite.shutil.which", lambda name: f"/tools/{name}"
+    )
+
+    def fake_run(
+        command: tuple[str, ...], **_: object
+    ) -> subprocess.CompletedProcess[str]:
+        name = Path(command[0]).name
+        return subprocess.CompletedProcess(command, 0, f"{name} version 1.2.3\n", "")
+
+    monkeypatch.setattr("autofix.evaluation_suite.subprocess.run", fake_run)
+
+    identity = _toolchain_identity({"Python", "JavaScript", "Go", "javascript"})
+
+    assert [item["name"] for item in identity] == ["go", "node"]
+    assert identity[0]["command"] == ["go", "version"]
+    assert identity[1]["version"] == "node version 1.2.3"
 
 
 class FixedRepairClient:
@@ -334,7 +358,7 @@ def test_repair_suite_scores_first_attempts_without_mutating_cases(
 
     assert result.passed
     assert result.mode == "repair"
-    assert result.to_dict()["version"] == 4
+    assert result.to_dict()["version"] == 5
     assert result.model == "fixed-model"
     assert result.to_dict()["autofix_version"]
     assert result.metrics["repair_eligible"] == 2
@@ -362,7 +386,7 @@ def test_repair_suite_scores_first_attempts_without_mutating_cases(
     assert "Mode: `repair`" in markdown
     assert "Model: `fixed-model`" in markdown
     aggregate = json.loads(result.json_report_path.read_text(encoding="utf-8"))
-    assert aggregate["version"] == 4
+    assert aggregate["version"] == 5
     assert aggregate["metrics"]["first_attempt_pass_rate"] == 1.0
     phases = [
         event.repair.phase
@@ -509,7 +533,7 @@ def test_repair_suite_does_not_call_model_for_mismatched_failure_contract(
     )
 
 
-def test_committed_repair_suite_schema_matches_v4_envelope(tmp_path: Path) -> None:
+def test_committed_repair_suite_schema_matches_v5_envelope(tmp_path: Path) -> None:
     _repair_case(tmp_path / "repair", "repair")
     payload = evaluate_suite(
         tmp_path,
@@ -520,7 +544,7 @@ def test_committed_repair_suite_schema_matches_v4_envelope(tmp_path: Path) -> No
     schema_path = (
         Path(__file__).resolve().parents[1]
         / "schemas"
-        / "autofix-evaluation-suite-v4.schema.json"
+        / "autofix-evaluation-suite-v5.schema.json"
     )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
 
@@ -555,12 +579,14 @@ def test_evaluate_suite_cli_repair_uses_selected_model(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["version"] == 4
+    assert payload["version"] == 5
     assert payload["mode"] == "repair"
     assert payload["model"] == "fixed-model"
     assert payload["model_identity"]["name"] == "fixed-model"
     assert payload["model_identity"]["digest"] is None
     assert payload["runtime_identity"]["python"]
+    assert payload["runtime_identity"]["toolchain_scope"] == "host"
+    assert payload["runtime_identity"]["toolchains"] == []
     assert payload["autofix_version"]
     assert payload["metrics"]["first_attempt_pass_rate"] == 1.0
 

@@ -142,7 +142,7 @@ autofix evaluate-suite examples\complex-validation `
   --max-attempts 3
 ```
 
-每个清单先独立匹配 `expected_failure`，不匹配时该用例的模型调用数保持为 0。匹配后复用单用例的 detached Git worktree/临时副本、路径策略、精确旧文本、破坏性检查与完整验证矩阵；无论成功或失败都不写回 fixture。repair 聚合遵循 [`autofix-evaluation-suite` v4 schema](../schemas/autofix-evaluation-suite-v4.schema.json)；历史 v2/v3 schema 保留用于读取旧报告。v4 包含 `autofix_version`、模型 digest/量化元数据、`runner`、运行环境、`max_attempts` 和以下指标：
+每个清单先独立匹配 `expected_failure`，不匹配时该用例的模型调用数保持为 0。匹配后复用单用例的 detached Git worktree/临时副本、路径策略、精确旧文本、破坏性检查与完整验证矩阵；无论成功或失败都不写回 fixture。repair 聚合遵循 [`autofix-evaluation-suite` v5 schema](../schemas/autofix-evaluation-suite-v5.schema.json)；历史 v2-v4 schema 保留。v5 包含 `autofix_version`、模型 digest/量化元数据、`runner`、Python/OS/架构、按有效用例语言采集的工具链版本、`max_attempts` 和以下指标：
 
 | 指标 | 含义 |
 | --- | --- |
@@ -204,7 +204,7 @@ repair 用例失败不一定存在异常：候选可能通过全部静态门禁�
 
 ### 6.3 冻结输入与趋势门禁
 
-`autofix-benchmark.yml` 可以把套件发现到的每个用例绑定到来源、revision、license 和完整源码树摘要；`autofix benchmark-verify` 在评测前阻断未声明用例与任意字节 drift。当前包含两个 synthetic 用例和一个固定到 `more-itertools` 完整 commit 的真实上游用例。`autofix evaluation-trend` 在评测后要求两份 suite 的 mode、`relative_root → contract_sha256`、模型 digest/量化身份、runner、尝试上限与运行环境完全一致，并在输出中绑定两份 suite SHA-256。详细格式、命令和退出码见[冻结评测基准与趋势比较](BENCHMARKING_ZH.md)。
+`autofix-benchmark.yml` 可以把每个用例绑定到来源、revision、license 和完整源码树摘要；`benchmark-verify` 在评测前阻断未声明用例与任意字节 drift。当前包含两个 synthetic 用例，以及固定到完整 commit 的 `more-itertools`/MIT 与 Go 标准库/BSD-3-Clause 上游用例。`evaluation-trend` 要求两份 suite 的题集、模型 digest/量化身份、runner、尝试上限、主机与语言工具链完全一致。详细格式见[冻结评测基准与趋势比较](BENCHMARKING_ZH.md)。
 
 后续评测工作按以下顺序推进：
 
@@ -229,4 +229,6 @@ repair 用例失败不一定存在异常：候选可能通过全部静态门禁�
 | D | Rust | module/trait、Cargo offline、borrow/type errors |
 | E | Python/Node advanced | async、类型检查、锁定依赖、lint/format gate |
 
-模型 repair 聚合、Ollama digest/量化/运行环境身份和同构 suite 趋势门禁已经实现；持久排行榜、容器镜像 digest 与编译器工具链身份尚未实现。不要把 baseline suite 通过率当作模型成功率，也不要只比较“最终是否通过”；越界修改与缺失必改文件同样是失败。具体版本里程碑见[开发路线图](ROADMAP_ZH.md)。
+模型 repair 聚合、Ollama digest/量化、主机与语言工具链身份和同构 suite 趋势门禁已经实现；持久真实模型基线与容器镜像 digest 尚未实现。不要把 baseline suite 通过率当作模型成功率，也不要只比较“最终是否通过”；越界修改与缺失必改文件同样是失败。具体版本里程碑见[开发路线图](ROADMAP_ZH.md)。
+
+真实模型 suite 可以通过 `autofix evaluation-publish` 进入人工审核与版本化发布流程。原始 suite 保留完整敏感证据并作为私有 artifact；公开 publication 重新绑定冻结语料、模型/工具链和指标，只保留逐 case 状态。默认只预览，失败结果、正式写入和源 suite 摘要均需显式确认。完整流程见[真实模型评测审核与版本化发布](EVALUATION_PUBLICATION_ZH.md)。

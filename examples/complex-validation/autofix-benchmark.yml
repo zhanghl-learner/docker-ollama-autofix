@@ -1,6 +1,13 @@
 version: 1
 name: autofix-complex-boundary-v1
 cases:
+  - path: go-stdlib-cutprefix
+    source:
+      kind: upstream
+      repository: https://github.com/golang/go
+      revision: 26b5783b72376acd0386f78295e678b9a6bff30e
+      license: BSD-3-Clause
+    tree_sha256: dda1cbe451d1149f0bc1a2c19c48370de8ec92c0447dc1170d8be735aeb09559
   - path: node-checkout-service
     source:
       kind: synthetic

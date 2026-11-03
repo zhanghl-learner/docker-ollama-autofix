@@ -8,7 +8,7 @@ AutoFix is a local-first command-line tool that detects a project's build system
 
 AutoFix is a safety-first code-repair engineering prototype and evaluation harness. It is intended for reproducible build or test failures in small and medium repositories where a developer can review the resulting diff. It is not positioned as a general autonomous programmer or as an unattended production service.
 
-The current evidence base includes an automated Windows test suite, real local repair loops across Python, Node.js, Go, C++, and Java, Docker-isolated Python verification, two synthetic multi-file benchmark cases, and one offline fixture pinned to an exact `more-itertools` upstream commit. Repair suite v4 binds Ollama model digest/quantization and runtime identity so trend comparisons reject changed execution conditions. Earlier 0.19.0 model results predate this frozen three-case corpus and must not be presented as current scores. These artifacts demonstrate a reproducible repair pipeline; they do not establish broad success on arbitrary repositories.
+The current evidence base includes an automated Windows test suite, real local repair loops across Python, Node.js, Go, C++, and Java, Docker-isolated Python verification, two synthetic multi-file benchmark cases, and two offline fixtures pinned to exact `more-itertools` and Go commits under different licenses. Repair suite v5 binds Ollama model digest/quantization, host runtime, and the actual language toolchain version so trend comparisons reject changed execution conditions. Earlier 0.19.0 model results predate this frozen four-case corpus and must not be presented as current scores. These artifacts demonstrate a reproducible repair pipeline; they do not establish broad success on arbitrary repositories.
 
 The next development phase is **safe real-repository integration and evaluation at scale**. Human review remains part of the intended workflow. See the [development roadmap](docs/ROADMAP_ZH.md) for milestones, acceptance criteria, and release preparation.
 
@@ -19,6 +19,7 @@ The next development phase is **safe real-repository integration and evaluation 
 - [多语言闭环验证报告](docs/MULTILANG_VALIDATION_ZH.md) — real Python, Node.js, Go, C++, and Java repair results plus missing-toolchain gates.
 - [复杂项目评测指南](docs/EVALUATION_ZH.md) — benchmark contracts, isolated model scoring, metrics, and fixture authoring.
 - [冻结评测基准与趋势比较](docs/BENCHMARKING_ZH.md) — provenance, exact corpus digests, comparable suite identities, and regression gates.
+- [真实模型评测审核与发布](docs/EVALUATION_PUBLICATION_ZH.md) — preview-first review, privacy-minimized attestations, and immutable versioned results.
 - [开发路线图与发布准备](docs/ROADMAP_ZH.md) — product positioning, maturity boundaries, milestone priorities, and definition of done.
 - [学习导读](docs/LEARNING_GUIDE_ZH.md) — a progressive mental model and study path for new maintainers.
 - [核心代码导读](docs/CORE_CODE_WALKTHROUGH_ZH.md) — the main call paths, data contracts, and module responsibilities.
@@ -88,7 +89,8 @@ The model proposes edits but never decides acceptance and never writes directly 
 - `autofix history [PATH]` lists timestamped repair audit reports, including rejected proposals, diffs, verification, and rollback outcomes.
 - `autofix evaluate [PATH]` validates an intentionally failing benchmark, including its expected exit code, failing step, and output signature; `--repair` runs Ollama only after that preflight matches, in an isolated copy, and scores changed-file scope against `autofix-eval.yml`.
 - `autofix benchmark-verify PATH` verifies that every evaluation case is declared with provenance and an exact bounded source-tree digest before scoring. `autofix evaluation-trend CURRENT --baseline PREVIOUS` compares only suites with identical modes, case contracts, model digest/quantization, runner policy, and runtime identity, and can fail CI on directional quality regressions.
-- `autofix evaluate-suite [PATH]` recursively discovers evaluation manifests and runs deterministic baselines as one suite; add `--repair --model MODEL` to score isolated model repairs. Human mode shows live context/Ollama/verification progress and every verified diff. Repair suite JSON v4 preserves context quality metrics and adds exact Ollama digest/quantization plus Python/OS/architecture identity for comparable runs.
+- `autofix evaluation-publish SUITE --benchmark PATH ...` previews a privacy-minimized real-model attestation, revalidates the frozen corpus and execution identity, and only writes an immutable versioned result after `--publish` repeats the reviewed suite SHA-256. It never publishes raw logs/source diffs or commits Git changes.
+- `autofix evaluate-suite [PATH]` recursively discovers evaluation manifests and runs deterministic baselines as one suite; add `--repair --model MODEL` to score isolated model repairs. Human mode shows live context/Ollama/verification progress and every verified diff. Repair suite JSON v5 preserves context quality metrics and adds exact Ollama digest/quantization, Python/OS/architecture, and suite-scoped Node/Go/compiler version evidence for comparable runs.
 - `autofix rollback REPORT --project PATH` reverses a recorded repair and first backs up the replaced files.
 - `autofix undo [PATH]` automatically reverses the latest successful repair that has not already been undone.
 - `--docker` runs build verification in a constrained container against a disposable project copy.
@@ -272,7 +274,7 @@ Evaluation is deliberately non-mutating. A baseline case passes only when its de
 
 ## Roadmap
 
-The v1 evaluation contract is established by the Python and Node.js multi-file boundary-condition fixtures. Git worktree isolation, CI result contracts, baseline suite aggregation, and isolated model-repair suite scoring are implemented. The next slices add model identity metadata and broader Go/Rust/Java/C++ cases. The detailed order and exit criteria are maintained in [docs/ROADMAP_ZH.md](docs/ROADMAP_ZH.md).
+The evaluation contract now includes synthetic Python/Node.js cases plus commit-pinned Python and Go upstream extractions. Git worktree isolation, CI result contracts, baseline suite aggregation, isolated model-repair scoring, frozen provenance, and toolchain-bound trend comparison are implemented. The next slices add versioned real-model baselines and broader Rust/Java/C++ upstream cases. The detailed order and exit criteria are maintained in [docs/ROADMAP_ZH.md](docs/ROADMAP_ZH.md).
 
 ## License
 

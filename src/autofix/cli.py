@@ -53,6 +53,11 @@ from autofix.evaluation import (
     evaluate_project,
     load_evaluation_manifest,
 )
+from autofix.evaluation_publication import (
+    EvaluationPublicationError,
+    prepare_evaluation_publication,
+    publish_evaluation_publication,
+)
 from autofix.evaluation_suite import (
     EvaluationSuiteError,
     EvaluationSuiteProgressEvent,
@@ -1874,6 +1879,115 @@ def benchmark_verify_command(
             console.print(f"Report: {result.report_path}")
     if not result.passed:
         raise typer.Exit(code=1)
+
+
+@app.command("evaluation-publish")
+def evaluation_publish_command(
+    suite_path: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, resolve_path=True
+    ),
+    benchmark: Path = typer.Option(
+        ...,
+        "--benchmark",
+        exists=True,
+        file_okay=False,
+        resolve_path=True,
+        help="Frozen benchmark root used by the reviewed suite.",
+    ),
+    release: str = typer.Option(
+        ..., "--release", help="Immutable publication version identifier."
+    ),
+    reviewed_by: str = typer.Option(
+        ..., "--reviewed-by", help="Human reviewer recorded in public evidence."
+    ),
+    review_note: str = typer.Option(
+        ..., "--review-note", help="Concise statement of what was reviewed."
+    ),
+    accept_failed: bool = typer.Option(
+        False,
+        "--accept-failed",
+        help="Explicitly permit publication of a reviewed failing suite.",
+    ),
+    publish: bool = typer.Option(
+        False,
+        "--publish",
+        help="Write the reviewed publication; default is preview only.",
+    ),
+    expected_suite_sha256: str | None = typer.Option(
+        None,
+        "--expected-suite-sha256",
+        help="Digest printed by preview; required with --publish.",
+    ),
+    output_root: Path = typer.Option(
+        Path("benchmarks/evaluation-results"),
+        "--output-root",
+        file_okay=False,
+        resolve_path=True,
+        help="Root for benchmark/release.json publications.",
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print the privacy-minimized publication JSON."
+    ),
+) -> None:
+    """Review and optionally publish immutable real-model suite evidence."""
+
+    try:
+        publication = prepare_evaluation_publication(
+            suite_path,
+            benchmark,
+            release=release,
+            reviewed_by=reviewed_by,
+            review_note=review_note,
+            accept_failed=accept_failed,
+        )
+        destination = None
+        if publish:
+            if expected_suite_sha256 is None:
+                raise EvaluationPublicationError(
+                    "--publish requires --expected-suite-sha256 from preview"
+                )
+            destination = publish_evaluation_publication(
+                publication,
+                output_root,
+                expected_suite_sha256=expected_suite_sha256,
+            )
+    except (OSError, EvaluationPublicationError) as exc:
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "schema": "autofix-evaluation-publication-error",
+                        "version": 1,
+                        "error": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            console.print(f"[red]Evaluation publication stopped: {exc}[/red]")
+        raise typer.Exit(code=2) from exc
+    if json_output:
+        _json(publication.to_dict())
+    else:
+        table = Table(title=f"Evaluation publication review: {publication.release}")
+        table.add_column("Field")
+        table.add_column("Value")
+        table.add_row("benchmark", publication.benchmark["name"])
+        table.add_row("suite SHA-256", publication.source_suite_sha256)
+        table.add_row("suite passed", str(publication.suite_passed).lower())
+        table.add_row("model", publication.model)
+        table.add_row("model digest", publication.model_identity["digest"])
+        table.add_row("runner", publication.runner)
+        table.add_row("reviewed by", publication.reviewed_by)
+        table.add_row("cases", str(len(publication.cases)))
+        console.print(table)
+        if destination is None:
+            console.print(
+                "[yellow]Preview only. Re-run with --publish and "
+                f"--expected-suite-sha256 {publication.source_suite_sha256}[/yellow]"
+            )
+        else:
+            console.print(f"[green]Published immutable evidence: {destination}[/green]")
 
 
 @app.command("evaluation-trend")

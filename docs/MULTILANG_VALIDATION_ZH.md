@@ -19,6 +19,8 @@
 
 Docker 本轮只对 Python 声明成功，因为本机没有 Node、Go、C++、Java 的专用离线镜像。其余成功组使用真实本机工具链。
 
+冻结聚合套件现在额外包含 Go 1.21.2 标准库 `strings.CutPrefix` 的 commit-pinned BSD-3-Clause 提炼样本。它与 Python/MIT 的 `more-itertools` 样本共同验证 upstream provenance；repair suite v5 会把实际 `go version` 和 `node --version` 首行写入运行身份，趋势比较不再依赖文档手工注明工具链。
+
 ## 2. 验收协议
 
 每个成功样例执行：

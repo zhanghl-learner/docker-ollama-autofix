@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import shutil
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, replace
@@ -28,7 +29,7 @@ from autofix.evaluation import (
 
 SUITE_SCHEMA = "autofix-evaluation-suite"
 BASELINE_SUITE_VERSION = 1
-REPAIR_SUITE_VERSION = 4
+REPAIR_SUITE_VERSION = 5
 _IGNORED_DIRECTORIES = {
     ".autofix",
     ".git",
@@ -41,6 +42,70 @@ _IGNORED_DIRECTORIES = {
     "node_modules",
     "target",
 }
+
+_LANGUAGE_TOOLCHAINS: dict[str, tuple[str, ...]] = {
+    "c": ("cc", "--version"),
+    "c++": ("c++", "--version"),
+    "cpp": ("c++", "--version"),
+    "go": ("go", "version"),
+    "java": ("java", "-version"),
+    "javascript": ("node", "--version"),
+    "node": ("node", "--version"),
+    "rust": ("rustc", "--version"),
+    "typescript": ("node", "--version"),
+}
+
+
+def expected_toolchain_commands(languages: set[str]) -> tuple[tuple[str, ...], ...]:
+    """Return stable version commands required by a set of case languages."""
+
+    return tuple(
+        sorted(
+            {
+                _LANGUAGE_TOOLCHAINS[language.strip().lower()]
+                for language in languages
+                if language.strip().lower() in _LANGUAGE_TOOLCHAINS
+            }
+        )
+    )
+
+
+def _toolchain_identity(languages: set[str]) -> list[dict[str, Any]]:
+    """Collect bounded version evidence for toolchains used by suite cases."""
+
+    identity: list[dict[str, Any]] = []
+    for command in expected_toolchain_commands(languages):
+        executable = shutil.which(command[0])
+        version = None
+        if executable is not None:
+            try:
+                completed = subprocess.run(
+                    (executable, *command[1:]),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=5,
+                    check=False,
+                    shell=False,
+                )
+                output = (
+                    completed.stdout.strip() or completed.stderr.strip()
+                    if completed.returncode == 0
+                    else ""
+                )
+                version = output.splitlines()[0][:500] if output else None
+            except (OSError, subprocess.SubprocessError):
+                version = None
+        identity.append(
+            {
+                "name": command[0],
+                "command": list(command),
+                "available": executable is not None,
+                "version": version,
+            }
+        )
+    return identity
 
 
 class EvaluationSuiteError(ValueError):
@@ -170,7 +235,7 @@ class EvaluationSuiteResult:
     max_attempts: int | None = None
     autofix_version: str = __version__
     model_identity: dict[str, Any] | None = None
-    runtime_identity: dict[str, str] | None = None
+    runtime_identity: dict[str, Any] | None = None
     report_dir: Path | None = None
     json_report_path: Path | None = None
     markdown_report_path: Path | None = None
@@ -463,6 +528,10 @@ def _markdown(result: EvaluationSuiteResult) -> str:
         f"- Duration: **{result.duration_seconds:.3f}s**",
     ]
     if result.mode == "repair":
+        toolchain_summary = ", ".join(
+            f"{item['name']}={item.get('version') or 'unavailable'}"
+            for item in (result.runtime_identity or {}).get("toolchains", [])
+        ) or "none"
         lines.extend(
             [
                 f"- Model: `{result.model}`",
@@ -474,6 +543,8 @@ def _markdown(result: EvaluationSuiteResult) -> str:
                 f"{(result.runtime_identity or {}).get('python', 'unknown')} / "
                 f"{(result.runtime_identity or {}).get('system', 'unknown')} "
                 f"{(result.runtime_identity or {}).get('machine', 'unknown')}`",
+                f"- Toolchains ({(result.runtime_identity or {}).get('toolchain_scope', 'unknown')}): "
+                f"`{toolchain_summary}`",
                 f"- First-attempt pass rate: **{metrics['first_attempt_pass_rate']:.2%}**",
                 f"- Average attempts: **{metrics['average_attempts']:.3f}**",
                 f"- Static rejection rate: **{metrics['static_rejection_rate']:.2%}**",
@@ -650,6 +721,9 @@ def evaluate_suite(
             "release": platform.release(),
             "machine": platform.machine(),
             "executable": Path(sys.executable).name,
+            "toolchain_scope": (
+                "host" if runner_name == "local" else "container-unresolved"
+            ),
         }
     case_roots = discover_evaluation_cases(suite_root)
     if not case_roots:
@@ -775,6 +849,15 @@ def evaluate_suite(
                     error_kind="duplicate_case_name",
                     error=f"Duplicate case name {name!r}: {locations}",
                 )
+    if runtime_identity is not None:
+        languages = {
+            case.result.manifest.language
+            for case in cases
+            if case.result is not None
+        }
+        runtime_identity["toolchains"] = (
+            _toolchain_identity(languages) if runner_name == "local" else []
+        )
     result = EvaluationSuiteResult(
         root=suite_root,
         cases=tuple(cases),

@@ -59,14 +59,19 @@ def test_repository_benchmark_manifest_matches_every_case() -> None:
 
     assert result.passed
     assert [case.relative_path for case in result.cases] == [
+        "go-stdlib-cutprefix",
         "node-checkout-service",
         "python-more-itertools-take",
         "python-order-service",
     ]
     assert all(case.file_count > 0 for case in result.cases)
-    upstream = next(case for case in result.cases if case.source.kind == "upstream")
-    assert upstream.source.repository == "https://github.com/more-itertools/more-itertools"
-    assert upstream.source.revision == "4aeb4338ae1407d8da9723e86da99efeb446f719"
+    upstream = [case for case in result.cases if case.source.kind == "upstream"]
+    assert [(case.source.repository, case.source.license) for case in upstream] == [
+        ("https://github.com/golang/go", "BSD-3-Clause"),
+        ("https://github.com/more-itertools/more-itertools", "MIT"),
+    ]
+    assert upstream[0].source.revision == "26b5783b72376acd0386f78295e678b9a6bff30e"
+    assert upstream[1].source.revision == "4aeb4338ae1407d8da9723e86da99efeb446f719"
 
 
 def test_benchmark_detects_source_tree_drift(tmp_path: Path) -> None:
@@ -174,6 +179,43 @@ def test_evaluation_trend_rejects_invalid_v4_model_digest(tmp_path: Path) -> Non
         path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(BenchmarkError, match="model identity is invalid"):
+        compare_evaluation_suites(current, baseline)
+
+
+def test_evaluation_trend_rejects_invalid_v5_toolchain_identity(tmp_path: Path) -> None:
+    baseline = _suite(tmp_path / "baseline.json", pass_rate=1.0)
+    current = _suite(tmp_path / "current.json", pass_rate=1.0)
+    for path in (baseline, current):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["version"] = 5
+        payload["model_identity"] = {
+            "name": "fixture-model",
+            "digest": "a" * 64,
+            "format": "gguf",
+            "family": "fixture",
+            "parameter_size": "1B",
+            "quantization_level": "Q4",
+        }
+        payload["runtime_identity"] = {
+            "python": "3.11.0",
+            "implementation": "CPython",
+            "system": "Windows",
+            "release": "test",
+            "machine": "AMD64",
+            "executable": "python.exe",
+            "toolchain_scope": "host",
+            "toolchains": [
+                {
+                    "name": "go",
+                    "command": [],
+                    "available": True,
+                    "version": "go version go1.21.2 windows/amd64",
+                }
+            ],
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(BenchmarkError, match="runtime identity is invalid"):
         compare_evaluation_suites(current, baseline)
 
 

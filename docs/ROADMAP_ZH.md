@@ -220,6 +220,10 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 
 第二十七切片加入首个真实上游冻结样本：`more-itertools` v11.2.1 的 `take()` 固定到完整 commit `4aeb4338ae1407d8da9723e86da99efeb446f719`，保留 MIT 许可证、最小提炼说明和独立故障注入记录，评测仍完全离线。repair suite 升级为 v4，自动从本地 Ollama `/api/tags` 绑定模型内容 digest、格式、模型族、参数规模和量化级别，并记录 Python/OS/架构；趋势比较拒绝模型、runner、尝试上限或运行身份不同的输入。下一阶段应增加第二个不同许可证/语言的上游样本、生成可版本化的历史基线，并研究容器镜像 digest 与编译器版本身份。
 
+第二十八切片加入第二个真实上游冻结样本：Go 1.21.2 标准库 `strings.CutPrefix` 固定到完整 commit `26b5783b72376acd0386f78295e678b9a6bff30e`，保留 BSD-3-Clause 许可证、六项上游行为表和单一边界故障说明；CI 固定 Go 1.21.2 并独立复现该契约。repair suite 升级为 v5，按有效用例语言用无 shell、限时的版本命令记录 Node/Go/Rust/Java/C/C++ 工具链，趋势键同步强制一致。下一阶段应创建经真实模型运行和人工审核的版本化基线发布流程，并把 Docker image ID/digest 绑定到容器 runner 身份。
+
+第二十九切片实现真实模型结果审核发布：`evaluation-publish` 默认只预览，重新验证冻结清单、case contract/元数据、suite v5、模型 digest、local 工具链、计数一致性和真实 proposal；失败 suite 需要 `--accept-failed`。显式发布还必须重复预览的 suite SHA-256，并以不可覆盖的 `<benchmark>/<release>.json` 输出隐私最小化证明，剔除绝对路径、日志、模型输出和源码 diff；原始 suite 继续作为私有 artifact。下一阶段应为 Docker runner 绑定 image ID/digest 和容器内工具链版本，再开放容器结果发布；随后可研究签名/来源证明，不能把普通 SHA 冒充数字签名。
+
 ## 8. 文档维护规则
 
 以后每轮迭代至少检查：

@@ -1,0 +1,25 @@
+version: 1
+name: go-stdlib-cutprefix-boundary
+language: Go
+difficulty: intermediate
+commands:
+  - go test ./...
+expected_failure:
+  exit_code: 1
+  failed_step: 1
+  output_contains:
+    - TestCutPrefix/exact_match
+    - 'CutPrefix("abc", "abc") = "abc", false, want "", true'
+  output_excludes:
+    - no required module provides package
+    - unrecognized import path
+allowed_change_paths:
+  - cutprefix.go
+required_change_paths:
+  - cutprefix.go
+tags:
+  - upstream-derived
+  - boundary-condition
+  - pinned-commit
+  - offline
+  - go

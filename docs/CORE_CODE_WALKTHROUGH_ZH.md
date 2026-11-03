@@ -33,7 +33,9 @@ cli.py
 
 `benchmark.py` 不调用 `repair_project()`：`verify_frozen_benchmark()` 先验证清单覆盖与每个用例的来源/树摘要；`compare_evaluation_suites()` 再验证两份 suite 的 mode、contract 集合、模型 digest/量化身份、runner 和运行环境，最后才计算有明确好坏方向的指标差值。输入不一致属于不可比较错误，而不是零分或回归。
 
-`OllamaClient.model_identity()` 从本机 `/api/tags` 精确解析已选模型，要求 64 位内容 digest，并保留 GGUF 格式、family、parameter size 与 quantization level。`evaluate_suite()` 把这些字段和 Python/系统/架构身份写入 repair suite v4；模型请求和修复判定仍使用原来的 schema 与隔离状态机，身份采集不扩大写权限。
+`evaluation_publication.py` 把私有 `suite.json` 转成公开证明，但不会简单复制文件。`prepare_evaluation_publication()` 重新认证冻结清单、case contract/元数据、模型和工具链、计分与 proposal；`publish_evaluation_publication()` 要求调用者重复预览摘要，并用 release 作为不可覆盖版本。公开 case 只保留身份和结果，不携带 `evaluation`、error 日志或绝对路径。
+
+`OllamaClient.model_identity()` 从本机 `/api/tags` 精确解析已选模型，要求 64 位内容 digest，并保留 GGUF 格式、family、parameter size 与 quantization level。`evaluate_suite()` 把这些字段和 Python/系统/架构身份写入 repair suite v5，并按有效用例语言用固定 argv 采集 Node、Go、Rust、Java 或 C/C++ 工具链首行版本。探测无 shell、限时、不安装依赖；模型请求和修复判定仍使用原来的 schema 与隔离状态机。
 
 同一模块的 `generate_property_candidate()` 调用 Ollama 的独立候选 schema，只把通过 AST/副作用边界的源码保存为 `.autofix` 审核工件。生成和执行是两个命令，模型没有直接调用 runner 或写项目测试树的能力。
 

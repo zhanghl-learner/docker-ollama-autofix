@@ -28,6 +28,10 @@
 - 新增 `evaluation-trend` 与 JSON schema v1：只比较 mode 和 case contract 集合完全一致的 suite，并支持方向性回归 CI 退出码。
 - 冻结基准新增首个真实上游用例：从 `more-itertools` v11.2.1 的精确 Git commit 提炼 `take()`，保留 MIT 许可证、裁剪说明和显式故障注入记录。
 - repair suite 升级为 JSON v4：记录 Ollama 模型内容 digest、格式、模型族、参数规模、量化级别，以及 Python/操作系统/机器架构运行身份；历史 v1-v3 schema 保留。
+- 冻结基准新增 Go 1.21.2 标准库 `strings.CutPrefix` 上游用例，绑定完整 commit、BSD-3-Clause 许可证、六项行为表和明确故障注入；CI 固定 Go 版本并离线复现。
+- repair suite 升级为 JSON v5：根据有效用例语言记录 Node、Go、Rust、Java、C/C++ 的固定版本 argv、可用状态和版本首行；历史 v1-v4 schema 保留。
+- 新增 preview-first `autofix evaluation-publish` 与 publication JSON schema v1：重新认证真实 repair suite v5、冻结语料、模型/工具链和计分一致性，显式摘要确认后发布不可覆盖的版本化证明。
+- 新增真实模型评测审核指南，区分私有原始 suite 与公开最小证明，说明失败成绩显式接受、release 版本策略及 SHA 不等于数字签名的信任边界。
 - 新增严格的 repair suite JSON schema v3；聚合 required-path context recall、Top-5 recall、平均命中排名、累计文件/字符、截断率和 fallback 比例，v1 baseline 与历史 v2 repair schema 保留。
 - 终端和 suite Markdown 展示上下文召回、排名与发送规模，使“上下文未命中”和“模型生成失败”可以分别诊断。
 - 新增可审计的 `SourceContext` / `ContextSelection`：从构建输出直接路径出发，有界遍历 Python（含包重导出和唯一模块后缀的 `src/` 布局）、JavaScript/TypeScript 与 C/C++ 本地依赖，并记录选择原因、测试属性、字符数和截断状态。
@@ -61,6 +65,8 @@
 
 - Python 与 JavaScript 属性 apply 共用 reviewed plan 认证、唯一 Git 目标检查、默认回滚文件创建和不可覆盖回执发布原语，减少高权限安全逻辑分叉。
 - `evaluation-trend` 除题集契约外还要求模型、digest/量化元数据、runner、尝试上限和运行环境身份一致，拒绝把运行条件变化报告为算法回归。
+- 工具链身份只运行 PATH 解析后的固定可执行文件与参数，禁用 shell、限制 5 秒和 500 字符，不安装依赖，也不把主机绝对路径写入报告。
+- 公开 publication 不复制 suite 根路径、报告路径、完整错误、模型输出、diff 或构建日志；发布要求人工 reviewer/note、真实 model digest、至少一次 proposal 和 local 已解析工具链，Docker unresolved 报告暂不接受。
 - `property-apply` 的候选回归与 plan 验证从真实项目迁移到当前 HEAD 的 detached worktree；只有隔离清理和原仓库复检全部成功才写入目标测试。
 - 上下文排序从“生产文件统一优先”升级为“错误输出直达生产文件→直达文件的本地生产依赖→直达测试→其余有界源码”，以在固定字符预算内减少无关文件竞争。
 - 模型提示新增通用可达性规则：若 guard 排除失败输入，应修改 guard 或更早控制流；禁止在 predicate 已由外层分支保证时添加等价内层条件。
@@ -99,7 +105,8 @@
 
 ### Verified
 
-- Windows 本机 324 项 pytest、`compileall`、16 份 JSON schema、三个复杂 fixture 基线与聚合套件、冻结清单/趋势/模型身份门禁、实时进度/终端 diff、语义重试、静态分析绑定、Python 与 JavaScript 属性差分/晋升、隔离应用与失败回滚检查通过。
+- Windows 本机 331 项 pytest、`compileall`、18 份 JSON schema、四个复杂 fixture 基线与聚合套件、冻结清单/趋势/模型与工具链身份门禁、实时进度/终端 diff、语义重试、静态分析绑定、Python 与 JavaScript 属性差分/晋升、隔离应用与失败回滚检查通过。
+- 本机 `qwen2.5-coder:7b`（digest `dae161e27b0e90dd1856c8bb3209201fd6736d8eb66298e75ed87571486f4364`）在冻结四案例上得到 3/4；失败成绩经显式接受后完成 preview、suite SHA-256 复核与临时目录不可覆盖发布闭环。该记录验证发布机制，不作为仓库正式基线成绩。
 - 独立 CLI 子进程在真实临时 Git 仓库执行 property apply，两步 pytest 验证通过，确定路径回执与 stdout JSON 完全一致；目标冲突回归确认新测试被撤销。
 - 使用真实 Node test runner 和离线 fast-check fixture 完成 JavaScript 稳定反例与修复双版本闭环；TAP 毫秒耗时在失败签名中规范化，避免把运行时间抖动误判为反例不稳定。
 - hoisted 与 fast-check 内嵌两种 pure-rand 布局均通过真实 Node 差分闭环；v2 证据准确区分两个安装相对位置并保存 manifest digest。

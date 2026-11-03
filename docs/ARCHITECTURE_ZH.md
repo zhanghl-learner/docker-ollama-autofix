@@ -268,9 +268,9 @@ flowchart LR
     STAGE --> PUBLISH[原子发布 suite.json / suite.md / cases]
 ```
 
-单个用例的解析或执行失败只改变该用例状态，不中断其余用例；重复 `case.name` 会把所有冲突项标记为失败。只有根目录无清单、repair 缺少模型或聚合报告无法发布才属于套件级错误。`autofix-evaluation-suite` v1 固定为 `mode=baseline`；历史 v2 repair schema 记录候选质量，v3 增加上下文检索和成本指标，当前 v4 再绑定模型内容与运行环境身份。失败异常携带内存态 `RepairResult`，因此 `--no-save` 不依赖读取临时 repair JSON 也能聚合拒绝和验证失败。
+单个用例的解析或执行失败只改变该用例状态，不中断其余用例；重复 `case.name` 会把所有冲突项标记为失败。只有根目录无清单、repair 缺少模型或聚合报告无法发布才属于套件级错误。`autofix-evaluation-suite` v1 固定为 `mode=baseline`；历史 v2 repair schema 记录候选质量，v3 增加上下文指标，v4 绑定模型与主机身份，当前 v5 再绑定套件实际语言工具链。失败异常携带内存态 `RepairResult`，因此 `--no-save` 不依赖读取临时 repair JSON 也能聚合拒绝和验证失败。
 
-v4 case 的外层字段继续复用 v3，失败摘要仍使用 `error`；完整证据放入开放的 `evaluation.repair_details`。新增 `model_identity` 保存 Ollama digest、模型格式、family、参数规模和量化级别，`runtime_identity` 保存 Python 实现/版本、OS/release、machine 与解释器名称。终端通过 `EvaluationSuiteCase.failure_summary` 区分契约不匹配、环境/模型错误、静态拒绝、验证失败和范围失败。JSON 不截断；Markdown 只截断超长展示片段，避免单份编译日志淹没整套报告。
+v5 case 的外层字段继续复用 v4，失败摘要仍使用 `error`；完整证据放入开放的 `evaluation.repair_details`。`model_identity` 保存 Ollama digest、模型格式、family、参数规模和量化级别；`runtime_identity` 除 Python/OS/架构外，新增 `toolchain_scope` 和排序后的 `toolchains`，每项固定 logical argv、可用状态和最多 500 字符的版本首行。本机探测只针对有效用例语言，解析到的绝对路径不进入报告；Docker 当前标记 `container-unresolved` 且不记录宿主工具，避免形成虚假容器身份。
 
 修复状态机通过可选 `RepairProgressCallback` 发出 `initial_verification_*`、`model_waiting`、`proposal_received/rejected`、`verification_started/failed`、`repair_succeeded/exhausted` 等不可变事件；回调只观察已有状态，不参与接受决策。套件将其包装为带用例序号和相对路径的 `EvaluationSuiteProgressEvent`。CLI renderer 在阻塞的模型请求和构建期间维护 Rich spinner，在状态边界停止 spinner 并写入持久终端行。`--json` 不注册 renderer，因此机器输出不会混入日志。
 
@@ -441,7 +441,9 @@ JavaScript promotion 是独立、无应用权限的消费者：它只接受完�
 
 每个实际入选文件都生成 `ContextSelection`：记录项目相对路径、`build-output` / `local-import:<来源>` / `project-source-fallback` 原因、测试属性、发送字符数和是否截断。repair report 按 attempt 保存这些不含源码正文的元数据；套件终端在请求模型前显示前六项。模型提示也收到同一原因列表，但它只用于相关性说明，不授予编辑权限。
 
-repair suite JSON v3 把这些记录聚合为检索质量与成本指标；v4 保持指标不变并增加可比较运行身份。首轮上下文和清单 `required_change_paths` 计算 required-path recall、Top-5 recall 与平均命中排名；所有尝试累计文件数、字符数、截断与 fallback。v1 baseline、历史 v2/v3 repair schema 保持不变，因此旧报告不会被新字段重新解释。
+repair suite JSON v3 把这些记录聚合为检索质量与成本指标；v4 增加模型/主机身份，v5 再增加语言工具链身份且保持指标不变。首轮上下文和清单 `required_change_paths` 计算 required-path recall、Top-5 recall 与平均命中排名；所有尝试累计文件数、字符数、截断与 fallback。v1 baseline、历史 v2-v4 repair schema 保持不变，因此旧报告不会被新字段重新解释。
+
+`evaluation_publication.py` 是原始 repair suite 与公开仓库之间的独立降权边界。它只读取 suite 和冻结 fixture：重新计算 manifest/case/tree 摘要，验证模型 digest、local 工具链、proposal 与计数，再构造不含根路径、日志、模型输出和 diff 的 publication v1。默认 preview 不写盘；显式发布必须重复 suite SHA-256，并复用不可覆盖的原子 JSON 发布原语。发布文件绑定私有 suite，但不把 SHA 描述为签名，也不自动 commit/push。Docker 的 `container-unresolved` 身份当前在发布前拒绝。
 
 上下文收集入口会先将项目根路径规范化，再处理目录遍历结果和构建输出中的文件路径。这用于统一 Windows 8.3 短路径（例如 `RUNNER~1`）与长路径所指向的同一目录；随后仍以解析后的候选路径执行根目录包含检查，因此路径别名兼容不会放宽项目边界或允许读取项目外文件。
 

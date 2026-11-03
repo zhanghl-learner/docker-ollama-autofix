@@ -342,7 +342,7 @@ autofix evaluate-suite examples\complex-validation `
   --max-attempts 3
 ```
 
-每个有效用例仍通过 `evaluate_project()` 单独进行故障签名 preflight，并在 detached Git worktree 或非 Git 临时副本中修复；原 fixture 不写回。repair 聚合使用 [JSON v4](../schemas/autofix-evaluation-suite-v4.schema.json)：保留 v3 的上下文召回/成本指标，并增加本地 Ollama 模型 digest、格式、family、参数规模、量化级别及 Python/OS/架构身份；历史 v2/v3 schema 保留，baseline 继续使用 JSON v1。终端表格后的 `Failed case details` 显示完整失败摘要；逐用例 JSON 的 `evaluation.repair_details` 保存 proposal、静态拒绝和每轮验证失败的 diagnosis、diff、构建步骤与完整输出；Markdown 展开同样证据，但单段 diff/输出最多展示 4000 字符，完整内容以 JSON 为准。`--docker` 模式要求所有用例共享一个明确的 `--docker-image` 或套件级配置镜像；当前不会为混合语言用例自动切换多个镜像。
+每个有效用例仍通过 `evaluate_project()` 单独进行故障签名 preflight，并在 detached Git worktree 或非 Git 临时副本中修复；原 fixture 不写回。repair 聚合使用 [JSON v5](../schemas/autofix-evaluation-suite-v5.schema.json)：保留 v4 的模型 digest/量化与主机身份，并增加套件实际涉及的 Node、Go、Rust、Java、C/C++ 工具链版本；历史 v2-v4 schema 保留，baseline 继续使用 JSON v1。工具链探测只运行固定的 `--version`/`version` argv，5 秒超时，不联网、不安装。终端表格后的 `Failed case details` 显示完整失败摘要；逐用例 JSON 的 `evaluation.repair_details` 保存完整尝试证据。`--docker` 模式要求所有用例共享一个明确的 `--docker-image` 或套件级配置镜像；当前不会为混合语言用例自动切换多个镜像。
 
 上下文召回以清单的 `required_change_paths` 为真值，只统计实际形成首轮上下文的 repair 用例。`required_context_recall` 表示必改路径是否进入首轮上下文，Top-5 指标进一步检查它是否足够靠前；多轮累计的 `context_files_sent` 与 `context_chars_sent` 用于估算模型输入成本。它们衡量检索质量，不代表模型一定能生成正确修改。
 
@@ -390,6 +390,7 @@ autofix evaluate-suite examples\complex-validation `
 | `autofix evaluate-suite PATH` | 批量执行评测故障基线并保存聚合证据 | 否 |
 | `autofix evaluate-suite PATH --repair --model MODEL` | 隔离执行批量模型修复并聚合计分 | 否 |
 | `autofix evaluate-suite PATH --repair --no-progress ...` | 关闭 spinner 和中间里程碑，仍保留最终人类报告 | 否 |
+| `autofix evaluation-publish SUITE --benchmark PATH ...` | 预览审核后的公开最小证明；加 `--publish` 和预览摘要才不可覆盖发布 | 仅显式发布时写结果目录 |
 | `autofix benchmark-verify PATH` | 验证评测清单覆盖、来源元数据和源码树摘要 | 否；可选写不可覆盖 JSON 回执 |
 | `autofix evaluation-trend CURRENT --baseline PREVIOUS` | 仅在 mode 和 case contract 完全相同时比较指标 | 否 |
 | `autofix evaluation-trend CURRENT --baseline PREVIOUS --fail-on-regression` | 方向性质量指标退化时返回 1 | 否；适合 CI 门禁 |
@@ -415,6 +416,7 @@ autofix property-js-apply --help
 autofix repair --help
 autofix apply-plan --help
 autofix evaluate-suite --help
+autofix evaluation-publish --help
 autofix benchmark-verify --help
 autofix evaluation-trend --help
 autofix ci-check --help

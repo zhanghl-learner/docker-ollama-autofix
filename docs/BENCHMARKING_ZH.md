@@ -21,7 +21,7 @@ cases:
 
 每个被 `autofix-eval.yml` 发现的用例必须在清单中出现且只能出现一次。`source.kind` 区分仓库自建的 `synthetic` fixture 与固定上游提交的 `upstream` fixture；repository、revision 和 license 均不能为空。upstream 来源额外要求 HTTPS 仓库地址和 7-64 位 Git commit，不接受 branch、tag 或浮动版本。
 
-当前套件包含两个 synthetic 用例，以及一个来自 `more-itertools` v11.2.1、固定到 `4aeb4338ae1407d8da9723e86da99efeb446f719` 的 upstream 用例。该目录保留原 MIT `LICENSE`，并在 `UPSTREAM.md` 记录原文件/函数、最小裁剪、类型适配和故障注入。验证阶段不克隆仓库或联网。
+当前套件包含两个 synthetic 用例和两个 upstream 用例：`more-itertools` v11.2.1 / MIT 固定到 `4aeb4338ae1407d8da9723e86da99efeb446f719`；Go 1.21.2 标准库 `strings.CutPrefix` / BSD-3-Clause 固定到 `26b5783b72376acd0386f78295e678b9a6bff30e`。每个目录均保留原 `LICENSE`，并在 `UPSTREAM.md` 记录原文件/函数、最小裁剪、适配和故障注入。验证阶段不克隆仓库或联网。
 
 树摘要按排序后的项目相对路径、文件长度和原始 bytes 计算，排除 `.git`、`.autofix`、依赖、缓存和构建目录。符号链接、超过 10,000 个文件或 64 MiB 的用例会直接拒绝。源码、测试或 `autofix-eval.yml` 任一字节变化都会造成 drift，必须经过审核后显式更新 revision 和摘要。
 
@@ -52,7 +52,7 @@ autofix evaluate-suite .\examples\complex-validation `
   --max-attempts 3
 ```
 
-repair suite v4 保存模型名、Ollama 内容 digest、格式、family、参数规模、量化级别、runner、尝试上限、AutoFix 版本，以及 Python/OS/机器架构。需要比较的 `suite.json` 应作为 CI artifact 或 release evidence 保留；digest 无法解析时会明确写为 `null`，不伪造模型身份。
+repair suite v5 保存模型名、Ollama 内容 digest、格式、family、参数规模、量化级别、runner、尝试上限、AutoFix 版本、Python/OS/机器架构，以及本套件实际涉及语言的工具链版本。本机 runner 使用固定无 shell argv、5 秒上限，只记录首行且不安装任何工具；Docker runner 当前明确记录 `container-unresolved` 和空工具链，不拿宿主版本冒充镜像版本。需要比较的 `suite.json` 应作为 CI artifact 或 release evidence 保留；无法解析的模型 digest 或工具版本明确写为 `null`，不伪造身份。
 
 ## 3. 比较趋势
 
@@ -85,4 +85,6 @@ autofix evaluation-trend .\current\suite.json `
 
 ## 4. 当前限制和下一步
 
-当前真实上游覆盖仍只有一个 Python/MIT 用例，样本量不足以形成通用排行榜。下一步应增加不同语言和许可证的固定上游样本，并把容器镜像 digest、编译器/Node 版本纳入 runner 身份。即使 suite 通过，数字也只表示这些冻结故障契约上的结果，不能外推为任意真实项目成功率。
+当前真实上游覆盖 Python/MIT 与 Go/BSD-3-Clause，样本量仍不足以形成通用排行榜。下一步应发布经过真实模型运行的版本化基线，并把容器镜像 digest 纳入 runner 身份，再增加 Rust/Java/C++ 样本。即使 suite 通过，数字也只表示这些冻结故障契约上的结果，不能外推为任意真实项目成功率。
+
+经过人工审核的真实模型结果使用 `evaluation-publish` 生成，而不是把原始 suite 直接提交到仓库。publication 会再次验证本协议中的冻结清单和 case contract，并保存源 suite SHA-256；审核、隐私字段和不可覆盖 release 规则见[发布指南](EVALUATION_PUBLICATION_ZH.md)。

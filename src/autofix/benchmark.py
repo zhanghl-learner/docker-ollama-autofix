@@ -320,7 +320,10 @@ _METRIC_DIRECTIONS = {
 }
 
 
-def _load_suite(path: Path) -> tuple[dict[str, Any], str]:
+def load_evaluation_suite(path: Path | str) -> tuple[dict[str, Any], str]:
+    """Load supported suite evidence and validate its execution identity."""
+
+    path = Path(path).expanduser().resolve()
     if not path.is_file() or path.is_symlink():
         raise BenchmarkError(f"Evaluation suite must be a regular JSON file: {path}")
     try:
@@ -338,7 +341,9 @@ def _load_suite(path: Path) -> tuple[dict[str, Any], str]:
     ):
         raise BenchmarkError(f"Evaluation suite has an unsupported structure: {path}")
     expected_version = 1 if data["mode"] == "baseline" else data.get("version")
-    if expected_version not in ({1} if data["mode"] == "baseline" else {2, 3, 4}):
+    if expected_version not in (
+        {1} if data["mode"] == "baseline" else {2, 3, 4, 5}
+    ):
         raise BenchmarkError(f"Evaluation suite version is unsupported: {path}")
     if data["mode"] == "repair" and (
         not isinstance(data.get("model"), str)
@@ -351,7 +356,7 @@ def _load_suite(path: Path) -> tuple[dict[str, Any], str]:
         or not data["autofix_version"].strip()
     ):
         raise BenchmarkError(f"Repair suite execution identity is invalid: {path}")
-    if data["mode"] == "repair" and data.get("version") == 4:
+    if data["mode"] == "repair" and data.get("version") in {4, 5}:
         model_identity = data.get("model_identity")
         runtime_identity = data.get("runtime_identity")
         model_keys = {
@@ -370,6 +375,9 @@ def _load_suite(path: Path) -> tuple[dict[str, Any], str]:
             "machine",
             "executable",
         }
+        runtime_text_keys = set(runtime_keys)
+        if data["version"] == 5:
+            runtime_keys.update({"toolchain_scope", "toolchains"})
         if (
             not isinstance(model_identity, dict)
             or set(model_identity) != model_keys
@@ -392,17 +400,74 @@ def _load_suite(path: Path) -> tuple[dict[str, Any], str]:
         if (
             not isinstance(runtime_identity, dict)
             or set(runtime_identity) != runtime_keys
-            or any(not isinstance(runtime_identity[key], str) for key in runtime_keys)
+            or any(
+                not isinstance(runtime_identity[key], str)
+                for key in runtime_text_keys
+            )
             or any(
                 not runtime_identity[key]
                 for key in {"python", "implementation", "system", "executable"}
             )
         ):
             raise BenchmarkError(f"Repair suite runtime identity is invalid: {path}")
+        if data["version"] == 5:
+            if runtime_identity["toolchain_scope"] not in {
+                "host",
+                "container-unresolved",
+            }:
+                raise BenchmarkError(
+                    f"Repair suite runtime identity is invalid: {path}"
+                )
+            toolchains = runtime_identity["toolchains"]
+            if not isinstance(toolchains, list):
+                raise BenchmarkError(
+                    f"Repair suite runtime identity is invalid: {path}"
+                )
+            seen_toolchains: set[str] = set()
+            for toolchain in toolchains:
+                if (
+                    not isinstance(toolchain, dict)
+                    or set(toolchain)
+                    != {"name", "command", "available", "version"}
+                    or not isinstance(toolchain.get("name"), str)
+                    or not toolchain["name"]
+                    or toolchain["name"] in seen_toolchains
+                    or not isinstance(toolchain.get("command"), list)
+                    or not toolchain["command"]
+                    or any(
+                        not isinstance(argument, str) or not argument
+                        for argument in toolchain["command"]
+                    )
+                    or not isinstance(toolchain.get("available"), bool)
+                    or (
+                        toolchain.get("version") is not None
+                        and (
+                            not isinstance(toolchain["version"], str)
+                            or len(toolchain["version"]) > 500
+                        )
+                    )
+                    or (
+                        not toolchain["available"]
+                        and toolchain.get("version") is not None
+                    )
+                ):
+                    raise BenchmarkError(
+                        f"Repair suite runtime identity is invalid: {path}"
+                    )
+                seen_toolchains.add(toolchain["name"])
+            if (
+                runtime_identity["toolchain_scope"] == "container-unresolved"
+                and toolchains
+            ):
+                raise BenchmarkError(
+                    f"Repair suite runtime identity is invalid: {path}"
+                )
     return data, hashlib.sha256(raw).hexdigest()
 
 
-def _case_identity(data: dict[str, Any]) -> dict[str, str]:
+def evaluation_case_identity(data: dict[str, Any]) -> dict[str, str]:
+    """Return the unique relative-path to contract-digest suite identity."""
+
     identity: dict[str, str] = {}
     for case in data["cases"]:
         if (
@@ -443,12 +508,12 @@ def compare_evaluation_suites(
 
     current_path = Path(current).expanduser().resolve()
     baseline_path = Path(baseline).expanduser().resolve()
-    current_data, current_sha256 = _load_suite(current_path)
-    baseline_data, baseline_sha256 = _load_suite(baseline_path)
+    current_data, current_sha256 = load_evaluation_suite(current_path)
+    baseline_data, baseline_sha256 = load_evaluation_suite(baseline_path)
     if current_data["mode"] != baseline_data["mode"]:
         raise BenchmarkError("Evaluation suites use different modes")
-    current_cases = _case_identity(current_data)
-    baseline_cases = _case_identity(baseline_data)
+    current_cases = evaluation_case_identity(current_data)
+    baseline_cases = evaluation_case_identity(baseline_data)
     if current_cases != baseline_cases:
         raise BenchmarkError("Evaluation suites do not contain the same case contracts")
     baseline_identity = _run_identity(baseline_data)
