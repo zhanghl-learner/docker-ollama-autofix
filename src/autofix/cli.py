@@ -35,8 +35,10 @@ from autofix.builders import (
     DockerConfig,
     DockerConfigurationError,
     build_docker_step,
+    collect_docker_toolchain_identity,
     default_image,
     parse_command,
+    resolve_docker_image_identity,
     run_build,
     run_build_docker,
 )
@@ -58,10 +60,17 @@ from autofix.evaluation_publication import (
     prepare_evaluation_publication,
     publish_evaluation_publication,
 )
+from autofix.evaluation_signature import (
+    EvaluationSignatureError,
+    sign_evaluation_publication,
+    verify_evaluation_signature,
+)
 from autofix.evaluation_suite import (
     EvaluationSuiteError,
     EvaluationSuiteProgressEvent,
+    declared_evaluation_languages,
     evaluate_suite,
+    expected_toolchain_commands,
 )
 from autofix.models import BuildStep, ProjectInspection
 from autofix.repository import (
@@ -1990,6 +1999,105 @@ def evaluation_publish_command(
             console.print(f"[green]Published immutable evidence: {destination}[/green]")
 
 
+@app.command("evaluation-sign")
+def evaluation_sign_command(
+    publication: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, resolve_path=True
+    ),
+    private_key: Path = typer.Option(
+        ...,
+        "--private-key",
+        exists=True,
+        dir_okay=False,
+        resolve_path=True,
+        help="Unencrypted PEM Ed25519 private key; its contents are never reported.",
+    ),
+    output: Path = typer.Option(
+        ...,
+        "--output",
+        dir_okay=False,
+        resolve_path=True,
+        help="Exact non-existing detached signature JSON path.",
+    ),
+    signer: str = typer.Option(
+        ..., "--signer", help="Human label covered by the signature."
+    ),
+    expected_publication_sha256: str = typer.Option(
+        ...,
+        "--expected-publication-sha256",
+        help="SHA-256 independently reviewed before using the private key.",
+    ),
+) -> None:
+    """Create non-overwriting Ed25519 evidence for exact publication bytes."""
+
+    try:
+        destination = sign_evaluation_publication(
+            publication,
+            private_key,
+            output,
+            signer=signer,
+            expected_publication_sha256=expected_publication_sha256,
+        )
+    except (OSError, EvaluationSignatureError) as exc:
+        console.print(f"[red]Evaluation signing stopped: {exc}[/red]")
+        raise typer.Exit(code=2) from exc
+    console.print(f"[green]Published detached Ed25519 signature: {destination}[/green]")
+
+
+@app.command("evaluation-verify-signature")
+def evaluation_verify_signature_command(
+    publication: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, resolve_path=True
+    ),
+    signature: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, resolve_path=True
+    ),
+    public_key: Path = typer.Option(
+        ...,
+        "--public-key",
+        exists=True,
+        dir_okay=False,
+        resolve_path=True,
+        help="Trusted PEM Ed25519 public key supplied out of band.",
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable verification evidence."
+    ),
+) -> None:
+    """Verify publication bytes and signed metadata with a trusted public key."""
+
+    try:
+        result = verify_evaluation_signature(publication, signature, public_key)
+    except (OSError, EvaluationSignatureError) as exc:
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "schema": "autofix-evaluation-signature-verification-error",
+                        "version": 1,
+                        "verified": False,
+                        "error": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            console.print(f"[red]Signature verification failed: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _json(result.to_dict())
+    else:
+        table = Table(title="Evaluation signature verification")
+        table.add_column("Field")
+        table.add_column("Value")
+        table.add_row("verified", "true")
+        table.add_row("release", result.release)
+        table.add_row("signer label", result.signer)
+        table.add_row("publication SHA-256", result.publication_sha256)
+        table.add_row("public key SHA-256", result.public_key_sha256)
+        console.print(table)
+
+
 @app.command("evaluation-trend")
 def evaluation_trend_command(
     current: Path = typer.Argument(
@@ -2110,6 +2218,8 @@ def evaluate_suite_command(
     try:
         config = _load_config_or_exit(path) if repair_mode or docker else None
         build_runner = run_build
+        container_identity = None
+        runtime_toolchains = None
         if docker:
             docker_config = _docker_config(
                 None,
@@ -2120,6 +2230,22 @@ def evaluate_suite_command(
                 False,
             )
             _require_docker()
+            if repair_mode:
+                resolved_image = resolve_docker_image_identity(docker_config)
+                docker_config = DockerConfig(
+                    resolved_image.image_id,
+                    docker_config.cpus,
+                    docker_config.memory,
+                    docker_config.pids_limit,
+                    docker_config.allow_network,
+                )
+                container_identity = resolved_image.to_dict()
+                runtime_toolchains = collect_docker_toolchain_identity(
+                    docker_config,
+                    expected_toolchain_commands(
+                        declared_evaluation_languages(path)
+                    ),
+                )
 
             def build_runner(  # type: ignore[no-redef]
                 root: Path,
@@ -2161,6 +2287,8 @@ def evaluate_suite_command(
                 build_runner=build_runner,
                 runner_name="docker" if docker else "local",
                 model_identity=model_identity,
+                container_identity=container_identity,
+                runtime_toolchains=runtime_toolchains,
                 progress_callback=progress_renderer,
             )
         finally:

@@ -20,7 +20,7 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 
 | 维度 | 0.19.0 已有证据 | 尚不能据此声称 |
 | --- | --- | --- |
-| 自动回归 | Windows 162 项通过；Linux Docker 161 项通过、1 项 Windows-only 跳过 | 覆盖所有平台和真实工具链组合 |
+| 自动回归 | Windows 本机 346 项收集（345 通过、1 项真实 Docker 集成按环境跳过）；Docker CI job 已接入真实 image identity 探测 | 覆盖更多平台和真实工具链组合 |
 | 多语言闭环 | Python、Node.js、Go、C++、Java 的真实修复流程 | 对任意大型多语言仓库稳定成功 |
 | Docker | Python 专用镜像下的离线、受限验证 | 容器是恶意项目的强安全沙箱 |
 | 复杂评测 | Python、Node 两个多文件边界用例 | 两个样例代表实际总体成功率 |
@@ -223,6 +223,10 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 第二十八切片加入第二个真实上游冻结样本：Go 1.21.2 标准库 `strings.CutPrefix` 固定到完整 commit `26b5783b72376acd0386f78295e678b9a6bff30e`，保留 BSD-3-Clause 许可证、六项上游行为表和单一边界故障说明；CI 固定 Go 1.21.2 并独立复现该契约。repair suite 升级为 v5，按有效用例语言用无 shell、限时的版本命令记录 Node/Go/Rust/Java/C/C++ 工具链，趋势键同步强制一致。下一阶段应创建经真实模型运行和人工审核的版本化基线发布流程，并把 Docker image ID/digest 绑定到容器 runner 身份。
 
 第二十九切片实现真实模型结果审核发布：`evaluation-publish` 默认只预览，重新验证冻结清单、case contract/元数据、suite v5、模型 digest、local 工具链、计数一致性和真实 proposal；失败 suite 需要 `--accept-failed`。显式发布还必须重复预览的 suite SHA-256，并以不可覆盖的 `<benchmark>/<release>.json` 输出隐私最小化证明，剔除绝对路径、日志、模型输出和源码 diff；原始 suite 继续作为私有 artifact。下一阶段应为 Docker runner 绑定 image ID/digest 和容器内工具链版本，再开放容器结果发布；随后可研究签名/来源证明，不能把普通 SHA 冒充数字签名。
+
+第三十切片实现 Docker 评测身份闭环：repair suite 升级为 v6；CLI 在模型调用前用 `docker image inspect` 把配置标签解析为不可变 `sha256:` image ID，真实构建和容器内版本探测随后只使用该 ID。探测继续执行 `--pull never`、断网、只读根文件系统、降权和资源限制，并保存原引用、RepoDigest（若有）与套件语言对应的固定工具链命令。publication 升级为 v2，重新认证这些字段后允许 Docker 结果发布；历史 v5 local 仍兼容，`container-unresolved` 仍拒绝。Docker CI job 对真实构建镜像执行 identity/toolchain 集成测试。下一阶段研究可选的数字签名和 CI provenance：必须验证真实公钥/工作流身份与签名内容，不把普通摘要或 reviewer 字符串描述成认证身份。
+
+第三十一切片实现 publication 的可选 Ed25519 授权层：`evaluation-sign` 要求重复已审核 publication SHA-256、显式 PEM 私钥和不可覆盖输出，签名覆盖域分离的规范声明而不只是文件摘要；`evaluation-verify-signature` 必须由调用者提供独立可信公钥，并验证原始字节、publication 身份、公钥指纹及全部已签元数据。签名/verification 各有严格 JSON schema，篡改 publication、release、signer 或换公钥均失败。该能力没有声称可信时间、证书链、吊销或 GitHub 工作流身份；下一阶段可以接入 GitHub artifact attestation/Sigstore OIDC 的验证侧，要求校验 subject digest、repository、workflow ref 与 issuer，且私钥签名和平台 provenance 保持两个独立信任域。
 
 ## 8. 文档维护规则
 

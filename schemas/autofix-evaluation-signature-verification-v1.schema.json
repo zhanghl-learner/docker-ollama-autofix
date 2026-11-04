@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zhanghl-learner/docker-ollama-autofix/blob/main/schemas/autofix-evaluation-signature-verification-v1.schema.json",
+  "title": "AutoFix Evaluation Signature Verification v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "version", "verified", "algorithm", "namespace",
+    "publication_sha256", "publication_version", "release", "signer",
+    "public_key_sha256", "signed_at"
+  ],
+  "properties": {
+    "schema": {"const": "autofix-evaluation-signature-verification"},
+    "version": {"const": 1},
+    "verified": {"const": true},
+    "algorithm": {"const": "ed25519"},
+    "namespace": {"const": "autofix-evaluation-signature-v1"},
+    "publication_sha256": {"$ref": "#/$defs/sha256"},
+    "publication_version": {"enum": [1, 2]},
+    "release": {"type": "string", "minLength": 1, "maxLength": 64},
+    "signer": {"type": "string", "minLength": 1, "maxLength": 200},
+    "public_key_sha256": {"$ref": "#/$defs/sha256"},
+    "signed_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

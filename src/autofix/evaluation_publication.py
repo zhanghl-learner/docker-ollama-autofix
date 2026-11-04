@@ -26,7 +26,7 @@ from autofix.property_apply import PropertyApplyPolicyError, publish_json_exclus
 
 
 PUBLICATION_SCHEMA = "autofix-evaluation-publication"
-PUBLICATION_VERSION = 1
+PUBLICATION_VERSION = 2
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
@@ -202,8 +202,8 @@ def prepare_evaluation_publication(
         raise EvaluationPublicationError(str(exc)) from exc
     if not benchmark.passed:
         raise EvaluationPublicationError("Frozen benchmark source tree has drifted")
-    if data.get("mode") != "repair" or data.get("version") != 5:
-        raise EvaluationPublicationError("Publication requires a repair suite v5")
+    if data.get("mode") != "repair" or data.get("version") not in {5, 6}:
+        raise EvaluationPublicationError("Publication requires a repair suite v5 or v6")
     if not isinstance(data.get("passed"), bool):
         raise EvaluationPublicationError("Suite passed flag is invalid")
     if not data["passed"] and not accept_failed:
@@ -214,9 +214,18 @@ def prepare_evaluation_publication(
     if model_identity.get("digest") is None:
         raise EvaluationPublicationError("Publication requires a resolved model digest")
     runtime_identity = data["runtime_identity"]
-    if data.get("runner") != "local" or runtime_identity.get("toolchain_scope") != "host":
+    runner = data.get("runner")
+    scope = runtime_identity.get("toolchain_scope")
+    local_identity = runner == "local" and scope == "host"
+    container_identity = (
+        data.get("version") == 6
+        and runner == "docker"
+        and scope == "container"
+        and isinstance(runtime_identity.get("container_image"), dict)
+    )
+    if not local_identity and not container_identity:
         raise EvaluationPublicationError(
-            "Publication currently requires a local runner with resolved toolchains"
+            "Publication requires resolved host or pinned container execution identity"
         )
     contracts, languages, case_metadata = _current_contracts(root)
     try:
@@ -231,12 +240,12 @@ def prepare_evaluation_publication(
         tuple(command) for command in expected_toolchain_commands(languages)
     }
     actual_toolchains = runtime_identity.get("toolchains")
-    actual_commands = {
-        tuple(item["command"])
+    actual_commands = {tuple(item["command"]) for item in actual_toolchains}
+    all_resolved = all(
+        item.get("available") is True and bool(item.get("version"))
         for item in actual_toolchains
-        if item.get("available") is True and item.get("version")
-    }
-    if actual_commands != expected_commands:
+    )
+    if actual_commands != expected_commands or not all_resolved:
         raise EvaluationPublicationError(
             "Suite does not contain every required resolved toolchain identity"
         )
@@ -290,6 +299,9 @@ def prepare_evaluation_publication(
             "toolchains",
         )
     }
+    public_runtime_identity["container_image"] = runtime_identity.get(
+        "container_image"
+    )
     started_at = _required_text(data.get("started_at"), "Suite start time", 100)
     try:
         parsed_started_at = datetime.fromisoformat(started_at.replace("Z", "+00:00"))

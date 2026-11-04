@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -29,7 +30,7 @@ from autofix.evaluation import (
 
 SUITE_SCHEMA = "autofix-evaluation-suite"
 BASELINE_SUITE_VERSION = 1
-REPAIR_SUITE_VERSION = 5
+REPAIR_SUITE_VERSION = 6
 _IGNORED_DIRECTORIES = {
     ".autofix",
     ".git",
@@ -503,6 +504,18 @@ def discover_evaluation_cases(root: Path | str) -> tuple[Path, ...]:
     return tuple(sorted(manifests, key=lambda path: path.as_posix()))
 
 
+def declared_evaluation_languages(root: Path | str) -> set[str]:
+    """Return languages from valid manifests for preflight identity collection."""
+
+    languages: set[str] = set()
+    for case_root in discover_evaluation_cases(root):
+        try:
+            languages.add(load_evaluation_manifest(case_root).language)
+        except (EvaluationError, OSError, UnicodeError):
+            continue
+    return languages
+
+
 def _case_id(relative_root: str) -> str:
     """Create a filesystem-safe stable identifier from a relative case root."""
 
@@ -686,6 +699,8 @@ def evaluate_suite(
     build_runner: Callable[..., BuildResult] = run_build,
     runner_name: str = "local",
     model_identity: dict[str, Any] | None = None,
+    container_identity: dict[str, Any] | None = None,
+    runtime_toolchains: list[dict[str, Any]] | None = None,
     progress_callback: EvaluationSuiteProgressCallback | None = None,
 ) -> EvaluationSuiteResult:
     """Run every contract in baseline or isolated repair mode and retain outcomes."""
@@ -701,6 +716,33 @@ def evaluate_suite(
         raise EvaluationSuiteError("runner_name must be 'local' or 'docker'")
     if mode == "repair" and not selected_model:
         raise EvaluationSuiteError("A model is required for repair evaluation")
+    if mode == "repair" and runner_name == "docker":
+        if (
+            not isinstance(container_identity, dict)
+            or set(container_identity) != {"reference", "image_id", "repo_digests"}
+            or not isinstance(container_identity.get("reference"), str)
+            or not container_identity["reference"]
+            or not isinstance(container_identity.get("image_id"), str)
+            or len(container_identity["image_id"]) != 71
+            or not container_identity["image_id"].startswith("sha256:")
+            or any(
+                char not in "0123456789abcdef"
+                for char in container_identity["image_id"][7:]
+            )
+            or not isinstance(container_identity.get("repo_digests"), list)
+            or any(
+                not isinstance(item, str)
+                or len(item) > 500
+                or re.fullmatch(r".+@sha256:[0-9a-f]{64}", item) is None
+                for item in container_identity["repo_digests"]
+            )
+            or not isinstance(runtime_toolchains, list)
+        ):
+            raise EvaluationSuiteError(
+                "Docker repair evaluation requires a resolved image and container toolchains"
+            )
+    if mode == "repair" and runner_name == "local" and container_identity is not None:
+        raise EvaluationSuiteError("Local repair evaluation cannot use a container identity")
     resolved_model_identity = None
     runtime_identity = None
     if mode == "repair":
@@ -721,15 +763,52 @@ def evaluate_suite(
             "release": platform.release(),
             "machine": platform.machine(),
             "executable": Path(sys.executable).name,
-            "toolchain_scope": (
-                "host" if runner_name == "local" else "container-unresolved"
-            ),
+            "toolchain_scope": "host" if runner_name == "local" else "container",
+            "container_image": container_identity if runner_name == "docker" else None,
         }
     case_roots = discover_evaluation_cases(suite_root)
     if not case_roots:
         raise EvaluationSuiteError(
             f"No autofix-eval.yml files found under {suite_root}"
         )
+    if mode == "repair" and runner_name == "docker":
+        expected_commands = set(
+            expected_toolchain_commands(declared_evaluation_languages(suite_root))
+        )
+        actual_commands: set[tuple[str, ...]] = set()
+        actual_names: set[str] = set()
+        for toolchain in runtime_toolchains or []:
+            if (
+                not isinstance(toolchain, dict)
+                or set(toolchain) != {"name", "command", "available", "version"}
+                or not isinstance(toolchain.get("name"), str)
+                or not toolchain["name"]
+                or toolchain["name"] in actual_names
+                or not isinstance(toolchain.get("command"), list)
+                or not toolchain["command"]
+                or any(
+                    not isinstance(argument, str) or not argument
+                    for argument in toolchain["command"]
+                )
+                or not isinstance(toolchain.get("available"), bool)
+                or (
+                    toolchain.get("version") is not None
+                    and (
+                        not isinstance(toolchain["version"], str)
+                        or len(toolchain["version"]) > 500
+                    )
+                )
+            ):
+                raise EvaluationSuiteError("Container toolchain identity is invalid")
+            actual_names.add(toolchain["name"])
+            actual_commands.add(tuple(toolchain["command"]))
+        if (
+            len(actual_commands) != len(runtime_toolchains or [])
+            or actual_commands != expected_commands
+        ):
+            raise EvaluationSuiteError(
+                "Container toolchain identity does not match suite languages"
+            )
     started_at = datetime.now(timezone.utc).isoformat()
     began = monotonic()
     cases: list[EvaluationSuiteCase] = []
@@ -856,7 +935,9 @@ def evaluate_suite(
             if case.result is not None
         }
         runtime_identity["toolchains"] = (
-            _toolchain_identity(languages) if runner_name == "local" else []
+            _toolchain_identity(languages)
+            if runner_name == "local"
+            else list(runtime_toolchains or [])
         )
     result = EvaluationSuiteResult(
         root=suite_root,

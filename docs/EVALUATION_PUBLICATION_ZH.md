@@ -4,18 +4,18 @@
 
 ## 1. 发布前提
 
-当前 publication v1 只接受 repair suite v5，并重新验证：
+当前 publication v2 接受历史 local repair suite v5 与当前 suite v6，并重新验证：
 
 - 冻结 `autofix-benchmark.yml` 完整覆盖、来源、许可证和源码树 SHA-256；
 - suite 的 `relative_root → contract_sha256` 与当前每份 `autofix-eval.yml` 逐字节一致；
 - case 名称、语言和难度仍与清单一致；
 - Ollama 模型 digest 已解析，不接受只有模型标签的报告；
-- runner 为 local，且 suite 中声明语言所需的 Go/Node/编译器工具链均有真实版本；
+- local runner 的工具链来自宿主；Docker runner 必须绑定经过 `docker image inspect` 解析的不可变 image ID，并在同一 ID 的受限容器内采集所需 Go/Node/编译器版本；
 - case 计数、通过数、失败数、通过率、suite passed 状态相互一致；
 - 至少产生过一个模型 proposal，不能把未调用模型的环境失败冒充模型评测；
 - 失败 suite 必须额外提供 `--accept-failed`。失败是有价值的基线，但不能被默认发布。
 
-当前 Docker 报告使用 `container-unresolved`，因此不能发布为正式基线。后续只有加入镜像 digest 和容器内工具链证据后才会开放。
+Docker 评测在模型调用前把标签解析为 `sha256:` image ID，随后构建和工具链探测均使用该 ID，不再继续使用可能漂移的标签。旧 v5 `container-unresolved` 报告仍可读取，但不能发布为正式基线。
 
 ## 2. 两阶段操作
 
@@ -61,11 +61,11 @@ benchmarks/evaluation-results/<benchmark-name>/<release>.json
 
 ## 3. 公开文件包含什么
 
-[`autofix-evaluation-publication` v1](../schemas/autofix-evaluation-publication-v1.schema.json) 保存：
+[`autofix-evaluation-publication` v2](../schemas/autofix-evaluation-publication-v2.schema.json) 保存：
 
 - release、审核时间、审核人、审核说明，以及是否显式接受失败 suite；
 - 冻结清单摘要、每个 fixture 的来源/commit/license/tree SHA；
-- 原始 suite 的 SHA-256、AutoFix 版本、模型 digest/量化、runner 与工具链身份；
+- 原始 suite 的 SHA-256、AutoFix 版本、模型 digest/量化、runner 与工具链身份；Docker 还保存原始镜像引用、不可变 image ID 和仓库 digest（若镜像提供）；
 - 聚合指标；
 - 每个 case 的相对路径、契约摘要、语言、难度、状态和通过结果。
 
@@ -74,3 +74,5 @@ benchmarks/evaluation-results/<benchmark-name>/<release>.json
 ## 4. 信任边界
 
 publication 是“结构校验 + 内容摘要 + 人工声明”，不是数字签名，也无法证明审核人真实身份。能够同时篡改原始 suite 和发布文件的人仍可伪造证据。因此公开结论应同时依赖 Git 历史、CI artifact 保留策略和代码审查；未来可增加签名或构建来源证明，但不会用一个自算 SHA 冒充可信签名。
+
+需要对 publication 精确字节和审核声明增加公钥认证时，使用[评测发布的 Ed25519 签名与验证](EVALUATION_SIGNATURE_ZH.md)。签名仍不自动证明 GitHub 工作流身份或可信时间。

@@ -219,6 +219,51 @@ def test_evaluation_trend_rejects_invalid_v5_toolchain_identity(tmp_path: Path) 
         compare_evaluation_suites(current, baseline)
 
 
+def test_evaluation_trend_rejects_docker_image_identity_drift(
+    tmp_path: Path,
+) -> None:
+    baseline = _suite(tmp_path / "baseline.json", pass_rate=1.0)
+    current = _suite(tmp_path / "current.json", pass_rate=1.0)
+    for index, path in enumerate((baseline, current)):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["version"] = 6
+        payload["runner"] = "docker"
+        payload["model_identity"] = {
+            "name": "fixture-model",
+            "digest": "a" * 64,
+            "format": "gguf",
+            "family": "fixture",
+            "parameter_size": "1B",
+            "quantization_level": "Q4",
+        }
+        payload["runtime_identity"] = {
+            "python": "3.11.0",
+            "implementation": "CPython",
+            "system": "Linux",
+            "release": "test",
+            "machine": "x86_64",
+            "executable": "python",
+            "toolchain_scope": "container",
+            "container_image": {
+                "reference": "fixture:latest",
+                "image_id": "sha256:" + ("b" if index == 0 else "c") * 64,
+                "repo_digests": [],
+            },
+            "toolchains": [
+                {
+                    "name": "node",
+                    "command": ["node", "--version"],
+                    "available": True,
+                    "version": "v22.0.0",
+                }
+            ],
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(BenchmarkError, match="model or runtime identities"):
+        compare_evaluation_suites(current, baseline)
+
+
 def test_evaluation_trend_rejects_non_finite_metrics(tmp_path: Path) -> None:
     baseline = _suite(tmp_path / "baseline.json", pass_rate=1.0)
     current = _suite(tmp_path / "current.json", pass_rate=float("nan"))

@@ -142,7 +142,7 @@ autofix evaluate-suite examples\complex-validation `
   --max-attempts 3
 ```
 
-每个清单先独立匹配 `expected_failure`，不匹配时该用例的模型调用数保持为 0。匹配后复用单用例的 detached Git worktree/临时副本、路径策略、精确旧文本、破坏性检查与完整验证矩阵；无论成功或失败都不写回 fixture。repair 聚合遵循 [`autofix-evaluation-suite` v5 schema](../schemas/autofix-evaluation-suite-v5.schema.json)；历史 v2-v4 schema 保留。v5 包含 `autofix_version`、模型 digest/量化元数据、`runner`、Python/OS/架构、按有效用例语言采集的工具链版本、`max_attempts` 和以下指标：
+每个清单先独立匹配 `expected_failure`，不匹配时该用例的模型调用数保持为 0。匹配后复用单用例的 detached Git worktree/临时副本、路径策略、精确旧文本、破坏性检查与完整验证矩阵；无论成功或失败都不写回 fixture。repair 聚合遵循 [`autofix-evaluation-suite` v6 schema](../schemas/autofix-evaluation-suite-v6.schema.json)；历史 v2-v5 schema 保留。v6 包含 `autofix_version`、模型 digest/量化元数据、`runner`、Python/OS/架构、按有效用例语言采集的宿主或容器工具链版本、Docker image ID（适用时）、`max_attempts` 和以下指标：
 
 | 指标 | 含义 |
 | --- | --- |
@@ -229,6 +229,8 @@ repair 用例失败不一定存在异常：候选可能通过全部静态门禁�
 | D | Rust | module/trait、Cargo offline、borrow/type errors |
 | E | Python/Node advanced | async、类型检查、锁定依赖、lint/format gate |
 
-模型 repair 聚合、Ollama digest/量化、主机与语言工具链身份和同构 suite 趋势门禁已经实现；持久真实模型基线与容器镜像 digest 尚未实现。不要把 baseline suite 通过率当作模型成功率，也不要只比较“最终是否通过”；越界修改与缺失必改文件同样是失败。具体版本里程碑见[开发路线图](ROADMAP_ZH.md)。
+模型 repair 聚合、Ollama digest/量化、宿主/容器工具链身份、不可变 Docker image ID、同构 suite 趋势门禁及人工审核发布已经实现。不要把 baseline suite 通过率当作模型成功率，也不要只比较“最终是否通过”；越界修改与缺失必改文件同样是失败。具体版本里程碑见[开发路线图](ROADMAP_ZH.md)。
 
 真实模型 suite 可以通过 `autofix evaluation-publish` 进入人工审核与版本化发布流程。原始 suite 保留完整敏感证据并作为私有 artifact；公开 publication 重新绑定冻结语料、模型/工具链和指标，只保留逐 case 状态。默认只预览，失败结果、正式写入和源 suite 摘要均需显式确认。完整流程见[真实模型评测审核与版本化发布](EVALUATION_PUBLICATION_ZH.md)。
+
+publication 需要跨渠道认证时，可以额外生成 Ed25519 detached signature；验证方必须显式选择可信公钥，签名不会把 reviewer 标签或 Git SHA 自动提升为外部身份。见[评测发布的 Ed25519 签名与验证](EVALUATION_SIGNATURE_ZH.md)。

@@ -108,7 +108,7 @@ jobs:
           -k "real_differential_loop or apply_cli_real_worktree_json_matches_schema"
 
   docker-self-host:
-    name: Docker self-host
+    name: Docker integration
     runs-on: ubuntu-latest
     needs: test
 
@@ -127,6 +127,11 @@ jobs:
 
       - name: Build constrained Python image
         run: docker build --file docker/python.Dockerfile --tag autofix-python:3.11 .
+
+      - name: Verify immutable Docker execution identity
+        env:
+          AUTOFIX_RUN_DOCKER_TESTS: "1"
+        run: python -m pytest tests/test_docker_integration.py -q
 
       - name: Run AutoFix inside Docker
         run: autofix run . --docker --no-save
@@ -161,3 +166,5 @@ jobs:
           autofix benchmark-verify --help
           autofix evaluation-trend --help
           autofix evaluation-publish --help
+          autofix evaluation-sign --help
+          autofix evaluation-verify-signature --help

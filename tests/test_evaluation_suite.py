@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from autofix.agent.ollama import FileEdit, RepairProposal
 from autofix.agent.context import ContextSelection, SourceContext
+from autofix.builders import DockerImageIdentity, run_build
 from autofix.cli import app
 from autofix.evaluation_suite import (
     EvaluationSuiteError,
@@ -358,7 +359,7 @@ def test_repair_suite_scores_first_attempts_without_mutating_cases(
 
     assert result.passed
     assert result.mode == "repair"
-    assert result.to_dict()["version"] == 5
+    assert result.to_dict()["version"] == 6
     assert result.model == "fixed-model"
     assert result.to_dict()["autofix_version"]
     assert result.metrics["repair_eligible"] == 2
@@ -386,7 +387,7 @@ def test_repair_suite_scores_first_attempts_without_mutating_cases(
     assert "Mode: `repair`" in markdown
     assert "Model: `fixed-model`" in markdown
     aggregate = json.loads(result.json_report_path.read_text(encoding="utf-8"))
-    assert aggregate["version"] == 5
+    assert aggregate["version"] == 6
     assert aggregate["metrics"]["first_attempt_pass_rate"] == 1.0
     phases = [
         event.repair.phase
@@ -533,7 +534,48 @@ def test_repair_suite_does_not_call_model_for_mismatched_failure_contract(
     )
 
 
-def test_committed_repair_suite_schema_matches_v5_envelope(tmp_path: Path) -> None:
+def test_docker_repair_suite_binds_pinned_image_and_container_tools(
+    tmp_path: Path,
+) -> None:
+    _repair_case(tmp_path / "repair", "repair")
+    image_id = "sha256:" + "a" * 64
+    toolchains: list[dict[str, object]] = []
+
+    result = evaluate_suite(
+        tmp_path,
+        client=FixedRepairClient(),
+        model="fixed-model",
+        runner_name="docker",
+        container_identity={
+            "reference": "autofix-python:3.11",
+            "image_id": image_id,
+            "repo_digests": ["autofix-python@sha256:" + "b" * 64],
+        },
+        runtime_toolchains=toolchains,
+        save_report=False,
+    )
+
+    assert result.passed
+    assert result.runtime_identity is not None
+    assert result.runtime_identity["toolchain_scope"] == "container"
+    assert result.runtime_identity["container_image"]["image_id"] == image_id
+    assert result.runtime_identity["toolchains"] == toolchains
+
+
+def test_docker_repair_suite_rejects_unresolved_image(tmp_path: Path) -> None:
+    _repair_case(tmp_path / "repair", "repair")
+
+    with pytest.raises(EvaluationSuiteError, match="resolved image"):
+        evaluate_suite(
+            tmp_path,
+            client=FixedRepairClient(),
+            model="fixed-model",
+            runner_name="docker",
+            save_report=False,
+        )
+
+
+def test_committed_repair_suite_schema_matches_v6_envelope(tmp_path: Path) -> None:
     _repair_case(tmp_path / "repair", "repair")
     payload = evaluate_suite(
         tmp_path,
@@ -544,7 +586,7 @@ def test_committed_repair_suite_schema_matches_v5_envelope(tmp_path: Path) -> No
     schema_path = (
         Path(__file__).resolve().parents[1]
         / "schemas"
-        / "autofix-evaluation-suite-v5.schema.json"
+        / "autofix-evaluation-suite-v6.schema.json"
     )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
 
@@ -579,16 +621,81 @@ def test_evaluate_suite_cli_repair_uses_selected_model(
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["version"] == 5
+    assert payload["version"] == 6
     assert payload["mode"] == "repair"
     assert payload["model"] == "fixed-model"
     assert payload["model_identity"]["name"] == "fixed-model"
     assert payload["model_identity"]["digest"] is None
     assert payload["runtime_identity"]["python"]
     assert payload["runtime_identity"]["toolchain_scope"] == "host"
+    assert payload["runtime_identity"]["container_image"] is None
     assert payload["runtime_identity"]["toolchains"] == []
     assert payload["autofix_version"]
     assert payload["metrics"]["first_attempt_pass_rate"] == 1.0
+
+
+def test_evaluate_suite_cli_pins_docker_image_before_repair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _repair_case(tmp_path / "repair", "repair")
+    image_id = "sha256:" + "a" * 64
+    observed_images: list[str] = []
+    monkeypatch.setattr(
+        "autofix.cli.OllamaClient", lambda _url: FixedRepairClient()
+    )
+    monkeypatch.setattr("autofix.cli._require_docker", lambda: None)
+    monkeypatch.setattr(
+        "autofix.cli.resolve_docker_image_identity",
+        lambda config: DockerImageIdentity(config.image, image_id, ()),
+    )
+    monkeypatch.setattr(
+        "autofix.cli.collect_docker_toolchain_identity",
+        lambda config, commands: observed_images.append(config.image) or [],
+    )
+
+    def fake_docker_runner(
+        root: Path,
+        steps: tuple[object, ...],
+        *,
+        config: object,
+        timeout_seconds: float,
+        save_report: bool = True,
+    ) -> object:
+        observed_images.append(config.image)  # type: ignore[attr-defined]
+        return run_build(
+            root,
+            steps,  # type: ignore[arg-type]
+            timeout_seconds=timeout_seconds,
+            save_report=save_report,
+        )
+
+    monkeypatch.setattr("autofix.cli.run_build_docker", fake_docker_runner)
+
+    result = runner.invoke(
+        app,
+        [
+            "evaluate-suite",
+            str(tmp_path),
+            "--repair",
+            "--model",
+            "fixed-model",
+            "--docker",
+            "--docker-image",
+            "fixture:latest",
+            "--json",
+            "--no-save",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["runner"] == "docker"
+    assert payload["runtime_identity"]["container_image"] == {
+        "reference": "fixture:latest",
+        "image_id": image_id,
+        "repo_digests": [],
+    }
+    assert observed_images and set(observed_images) == {image_id}
 
 
 def test_evaluate_suite_cli_explains_verification_failure(

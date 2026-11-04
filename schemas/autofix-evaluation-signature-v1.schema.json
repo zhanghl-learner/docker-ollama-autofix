@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zhanghl-learner/docker-ollama-autofix/blob/main/schemas/autofix-evaluation-signature-v1.schema.json",
+  "title": "AutoFix Evaluation Signature v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "version", "algorithm", "namespace", "publication_sha256",
+    "publication_schema", "publication_version", "release", "signed_at",
+    "signer", "public_key_sha256", "signature"
+  ],
+  "properties": {
+    "schema": {"const": "autofix-evaluation-signature"},
+    "version": {"const": 1},
+    "algorithm": {"const": "ed25519"},
+    "namespace": {"const": "autofix-evaluation-signature-v1"},
+    "publication_sha256": {"$ref": "#/$defs/sha256"},
+    "publication_schema": {"const": "autofix-evaluation-publication"},
+    "publication_version": {"enum": [1, 2]},
+    "release": {"type": "string", "minLength": 1, "maxLength": 64},
+    "signed_at": {"type": "string", "format": "date-time"},
+    "signer": {"type": "string", "minLength": 1, "maxLength": 200},
+    "public_key_sha256": {"$ref": "#/$defs/sha256"},
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9+/]{86}==$"
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

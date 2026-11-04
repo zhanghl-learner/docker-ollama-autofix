@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -342,7 +343,7 @@ def load_evaluation_suite(path: Path | str) -> tuple[dict[str, Any], str]:
         raise BenchmarkError(f"Evaluation suite has an unsupported structure: {path}")
     expected_version = 1 if data["mode"] == "baseline" else data.get("version")
     if expected_version not in (
-        {1} if data["mode"] == "baseline" else {2, 3, 4, 5}
+        {1} if data["mode"] == "baseline" else {2, 3, 4, 5, 6}
     ):
         raise BenchmarkError(f"Evaluation suite version is unsupported: {path}")
     if data["mode"] == "repair" and (
@@ -356,7 +357,7 @@ def load_evaluation_suite(path: Path | str) -> tuple[dict[str, Any], str]:
         or not data["autofix_version"].strip()
     ):
         raise BenchmarkError(f"Repair suite execution identity is invalid: {path}")
-    if data["mode"] == "repair" and data.get("version") in {4, 5}:
+    if data["mode"] == "repair" and data.get("version") in {4, 5, 6}:
         model_identity = data.get("model_identity")
         runtime_identity = data.get("runtime_identity")
         model_keys = {
@@ -376,8 +377,10 @@ def load_evaluation_suite(path: Path | str) -> tuple[dict[str, Any], str]:
             "executable",
         }
         runtime_text_keys = set(runtime_keys)
-        if data["version"] == 5:
+        if data["version"] in {5, 6}:
             runtime_keys.update({"toolchain_scope", "toolchains"})
+        if data["version"] == 6:
+            runtime_keys.add("container_image")
         if (
             not isinstance(model_identity, dict)
             or set(model_identity) != model_keys
@@ -410,11 +413,13 @@ def load_evaluation_suite(path: Path | str) -> tuple[dict[str, Any], str]:
             )
         ):
             raise BenchmarkError(f"Repair suite runtime identity is invalid: {path}")
-        if data["version"] == 5:
-            if runtime_identity["toolchain_scope"] not in {
-                "host",
-                "container-unresolved",
-            }:
+        if data["version"] in {5, 6}:
+            allowed_scopes = (
+                {"host", "container"}
+                if data["version"] == 6
+                else {"host", "container-unresolved"}
+            )
+            if runtime_identity["toolchain_scope"] not in allowed_scopes:
                 raise BenchmarkError(
                     f"Repair suite runtime identity is invalid: {path}"
                 )
@@ -455,13 +460,53 @@ def load_evaluation_suite(path: Path | str) -> tuple[dict[str, Any], str]:
                         f"Repair suite runtime identity is invalid: {path}"
                     )
                 seen_toolchains.add(toolchain["name"])
-            if (
+            if data["version"] == 5 and (
                 runtime_identity["toolchain_scope"] == "container-unresolved"
                 and toolchains
             ):
                 raise BenchmarkError(
                     f"Repair suite runtime identity is invalid: {path}"
                 )
+            if data["version"] == 6:
+                container = runtime_identity["container_image"]
+                if runtime_identity["toolchain_scope"] == "host":
+                    valid_container = container is None
+                else:
+                    valid_container = (
+                        data.get("runner") == "docker"
+                        and isinstance(container, dict)
+                        and set(container)
+                        == {"reference", "image_id", "repo_digests"}
+                        and isinstance(container.get("reference"), str)
+                        and bool(container["reference"])
+                        and isinstance(container.get("image_id"), str)
+                        and len(container["image_id"]) == 71
+                        and container["image_id"].startswith("sha256:")
+                        and all(
+                            char in "0123456789abcdef"
+                            for char in container["image_id"][7:]
+                        )
+                        and isinstance(container.get("repo_digests"), list)
+                        and all(
+                            isinstance(item, str)
+                            and len(item) <= 500
+                            and re.fullmatch(
+                                r".+@sha256:[0-9a-f]{64}", item
+                            )
+                            is not None
+                            for item in container["repo_digests"]
+                        )
+                    )
+                if (
+                    not valid_container
+                    or (
+                        runtime_identity["toolchain_scope"] == "host"
+                        and data.get("runner") != "local"
+                    )
+                ):
+                    raise BenchmarkError(
+                        f"Repair suite runtime identity is invalid: {path}"
+                    )
     return data, hashlib.sha256(raw).hexdigest()
 
 

@@ -52,7 +52,7 @@ autofix evaluate-suite .\examples\complex-validation `
   --max-attempts 3
 ```
 
-repair suite v5 保存模型名、Ollama 内容 digest、格式、family、参数规模、量化级别、runner、尝试上限、AutoFix 版本、Python/OS/机器架构，以及本套件实际涉及语言的工具链版本。本机 runner 使用固定无 shell argv、5 秒上限，只记录首行且不安装任何工具；Docker runner 当前明确记录 `container-unresolved` 和空工具链，不拿宿主版本冒充镜像版本。需要比较的 `suite.json` 应作为 CI artifact 或 release evidence 保留；无法解析的模型 digest 或工具版本明确写为 `null`，不伪造身份。
+repair suite v6 保存模型名、Ollama 内容 digest、格式、family、参数规模、量化级别、runner、尝试上限、AutoFix 版本、Python/OS/机器架构，以及本套件实际涉及语言的工具链版本。本机 runner 使用固定无 shell argv、5 秒上限；Docker runner 先解析本地镜像的不可变 image ID，再用该 ID、断网、只读根文件系统和降权参数执行固定版本命令，最多保留 500 字符首行，不安装任何工具。原始标签和可用 RepoDigest 一并保存，但真正执行和趋势比较绑定 image ID。历史 v5 保留读取，其中 `container-unresolved` 不能作为 publication。需要比较的 `suite.json` 应作为 CI artifact 或 release evidence 保留；无法解析的模型 digest 或工具版本明确写为 `null`，不伪造身份。
 
 ## 3. 比较趋势
 
@@ -88,3 +88,5 @@ autofix evaluation-trend .\current\suite.json `
 当前真实上游覆盖 Python/MIT 与 Go/BSD-3-Clause，样本量仍不足以形成通用排行榜。下一步应发布经过真实模型运行的版本化基线，并把容器镜像 digest 纳入 runner 身份，再增加 Rust/Java/C++ 样本。即使 suite 通过，数字也只表示这些冻结故障契约上的结果，不能外推为任意真实项目成功率。
 
 经过人工审核的真实模型结果使用 `evaluation-publish` 生成，而不是把原始 suite 直接提交到仓库。publication 会再次验证本协议中的冻结清单和 case contract，并保存源 suite SHA-256；审核、隐私字段和不可覆盖 release 规则见[发布指南](EVALUATION_PUBLICATION_ZH.md)。
+
+需要验证 publication 是否由指定私钥持有者批准时，再使用独立的 [Ed25519 签名协议](EVALUATION_SIGNATURE_ZH.md)；冻结基准摘要、publication 摘要和数字签名承担不同职责，不能互相替代。

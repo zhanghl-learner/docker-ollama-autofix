@@ -23,7 +23,13 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_BENCHMARK = REPOSITORY_ROOT / "examples" / "complex-validation"
 
 
-def _suite(path: Path, benchmark: Path, *, passed: bool = True) -> Path:
+def _suite(
+    path: Path,
+    benchmark: Path,
+    *,
+    passed: bool = True,
+    runner_name: str = "local",
+) -> Path:
     cases = []
     for case_root in discover_evaluation_cases(benchmark):
         relative = case_root.relative_to(benchmark).as_posix()
@@ -51,14 +57,14 @@ def _suite(path: Path, benchmark: Path, *, passed: bool = True) -> Path:
     passed_count = count if passed else 0
     payload = {
         "schema": "autofix-evaluation-suite",
-        "version": 5,
+        "version": 6,
         "mode": "repair",
         "root": "PRIVATE/root",
         "started_at": "2026-11-03T08:00:00+00:00",
         "duration_seconds": 10.0,
         "passed": passed,
         "model": "qwen2.5-coder:7b",
-        "runner": "local",
+        "runner": runner_name,
         "max_attempts": 3,
         "autofix_version": "0.19.0",
         "model_identity": {
@@ -76,7 +82,14 @@ def _suite(path: Path, benchmark: Path, *, passed: bool = True) -> Path:
             "release": "test",
             "machine": "AMD64",
             "executable": "PRIVATE/python.exe",
-            "toolchain_scope": "host",
+            "toolchain_scope": "host" if runner_name == "local" else "container",
+            "container_image": None
+            if runner_name == "local"
+            else {
+                "reference": "autofix-eval:1",
+                "image_id": "sha256:" + "b" * 64,
+                "repo_digests": ["autofix-eval@sha256:" + "c" * 64],
+            },
             "toolchains": [
                 {
                     "name": "go",
@@ -139,6 +152,66 @@ def test_review_builds_path_free_source_bound_publication(tmp_path: Path) -> Non
     assert "PRIVATE" not in serialized
     assert "executable" not in payload["runtime_identity"]
     assert "evaluation" not in payload["cases"][0]
+
+
+def test_review_accepts_pinned_container_evidence(tmp_path: Path) -> None:
+    benchmark = _benchmark(tmp_path)
+    suite = _suite(
+        tmp_path / "docker-suite.json", benchmark, runner_name="docker"
+    )
+
+    publication = prepare_evaluation_publication(
+        suite,
+        benchmark,
+        release="docker-reviewed-1",
+        reviewed_by="reviewer",
+        review_note="Reviewed the pinned image and container toolchains.",
+    ).to_dict()
+
+    assert publication["version"] == 2
+    assert publication["runner"] == "docker"
+    assert publication["runtime_identity"]["toolchain_scope"] == "container"
+    assert publication["runtime_identity"]["container_image"]["image_id"] == (
+        "sha256:" + "b" * 64
+    )
+
+
+def test_review_keeps_historical_v5_local_compatibility(tmp_path: Path) -> None:
+    benchmark = _benchmark(tmp_path)
+    suite = _suite(tmp_path / "local-v5.json", benchmark)
+    payload = json.loads(suite.read_text(encoding="utf-8"))
+    payload["version"] = 5
+    payload["runtime_identity"].pop("container_image")
+    suite.write_text(json.dumps(payload), encoding="utf-8")
+
+    publication = prepare_evaluation_publication(
+        suite,
+        benchmark,
+        release="historical-v5",
+        reviewed_by="reviewer",
+        review_note="Reviewed historical local evidence.",
+    ).to_dict()
+
+    assert publication["source_suite_version"] == 5
+    assert publication["runtime_identity"]["container_image"] is None
+
+
+def test_review_rejects_unresolved_container_toolchain(tmp_path: Path) -> None:
+    benchmark = _benchmark(tmp_path)
+    suite = _suite(tmp_path / "docker-suite.json", benchmark, runner_name="docker")
+    payload = json.loads(suite.read_text(encoding="utf-8"))
+    payload["runtime_identity"]["toolchains"][0]["available"] = False
+    payload["runtime_identity"]["toolchains"][0]["version"] = None
+    suite.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(EvaluationPublicationError, match="resolved toolchain"):
+        prepare_evaluation_publication(
+            suite,
+            benchmark,
+            release="missing-container-tool",
+            reviewed_by="reviewer",
+            review_note="Reviewed incomplete container evidence.",
+        )
 
 
 def test_publication_requires_explicit_failed_acceptance(tmp_path: Path) -> None:
@@ -237,7 +310,7 @@ def test_publication_cli_is_preview_first_and_json_matches_schema(tmp_path: Path
         (
             REPOSITORY_ROOT
             / "schemas"
-            / "autofix-evaluation-publication-v1.schema.json"
+            / "autofix-evaluation-publication-v2.schema.json"
         ).read_text(encoding="utf-8")
     )
     assert set(schema["required"]) == set(payload)

@@ -342,7 +342,7 @@ autofix evaluate-suite examples\complex-validation `
   --max-attempts 3
 ```
 
-每个有效用例仍通过 `evaluate_project()` 单独进行故障签名 preflight，并在 detached Git worktree 或非 Git 临时副本中修复；原 fixture 不写回。repair 聚合使用 [JSON v5](../schemas/autofix-evaluation-suite-v5.schema.json)：保留 v4 的模型 digest/量化与主机身份，并增加套件实际涉及的 Node、Go、Rust、Java、C/C++ 工具链版本；历史 v2-v4 schema 保留，baseline 继续使用 JSON v1。工具链探测只运行固定的 `--version`/`version` argv，5 秒超时，不联网、不安装。终端表格后的 `Failed case details` 显示完整失败摘要；逐用例 JSON 的 `evaluation.repair_details` 保存完整尝试证据。`--docker` 模式要求所有用例共享一个明确的 `--docker-image` 或套件级配置镜像；当前不会为混合语言用例自动切换多个镜像。
+每个有效用例仍通过 `evaluate_project()` 单独进行故障签名 preflight，并在 detached Git worktree 或非 Git 临时副本中修复；原 fixture 不写回。repair 聚合使用 [JSON v6](../schemas/autofix-evaluation-suite-v6.schema.json)：保留模型 digest/量化、主机身份和套件实际涉及的 Node、Go、Rust、Java、C/C++ 工具链版本，并为 Docker runner 增加不可变 image ID、原始引用、RepoDigest 与容器内工具版本；历史 v2-v5 schema 保留，baseline 继续使用 JSON v1。本机工具探测只运行固定 argv、5 秒超时；Docker 探测使用同一个已固定 image ID、断网只读容器和 10 秒超时。两者均不安装依赖。终端表格后的 `Failed case details` 显示完整失败摘要；逐用例 JSON 的 `evaluation.repair_details` 保存完整尝试证据。`--docker` 模式要求所有用例共享一个包含全部语言工具链的明确镜像；当前不会为混合语言用例自动切换多个镜像，缺少任何所需工具的 suite 可以保存但不能发布为正式 publication。
 
 上下文召回以清单的 `required_change_paths` 为真值，只统计实际形成首轮上下文的 repair 用例。`required_context_recall` 表示必改路径是否进入首轮上下文，Top-5 指标进一步检查它是否足够靠前；多轮累计的 `context_files_sent` 与 `context_chars_sent` 用于估算模型输入成本。它们衡量检索质量，不代表模型一定能生成正确修改。
 
@@ -391,6 +391,8 @@ autofix evaluate-suite examples\complex-validation `
 | `autofix evaluate-suite PATH --repair --model MODEL` | 隔离执行批量模型修复并聚合计分 | 否 |
 | `autofix evaluate-suite PATH --repair --no-progress ...` | 关闭 spinner 和中间里程碑，仍保留最终人类报告 | 否 |
 | `autofix evaluation-publish SUITE --benchmark PATH ...` | 预览审核后的公开最小证明；加 `--publish` 和预览摘要才不可覆盖发布 | 仅显式发布时写结果目录 |
+| `autofix evaluation-sign PUBLICATION --private-key KEY ...` | 用明确复核的 publication SHA-256 创建不可覆盖 Ed25519 签名 | 只写指定签名文件；不修改 publication/Git |
+| `autofix evaluation-verify-signature PUBLICATION SIGNATURE --public-key KEY` | 使用独立可信公钥验证 publication 精确字节和已签元数据 | 否 |
 | `autofix benchmark-verify PATH` | 验证评测清单覆盖、来源元数据和源码树摘要 | 否；可选写不可覆盖 JSON 回执 |
 | `autofix evaluation-trend CURRENT --baseline PREVIOUS` | 仅在 mode 和 case contract 完全相同时比较指标 | 否 |
 | `autofix evaluation-trend CURRENT --baseline PREVIOUS --fail-on-regression` | 方向性质量指标退化时返回 1 | 否；适合 CI 门禁 |
@@ -417,6 +419,8 @@ autofix repair --help
 autofix apply-plan --help
 autofix evaluate-suite --help
 autofix evaluation-publish --help
+autofix evaluation-sign --help
+autofix evaluation-verify-signature --help
 autofix benchmark-verify --help
 autofix evaluation-trend --help
 autofix ci-check --help
