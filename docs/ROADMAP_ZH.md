@@ -228,6 +228,10 @@ AutoFix 是一个本地优先、安全约束优先的代码修复工程原型与
 
 第三十一切片实现 publication 的可选 Ed25519 授权层：`evaluation-sign` 要求重复已审核 publication SHA-256、显式 PEM 私钥和不可覆盖输出，签名覆盖域分离的规范声明而不只是文件摘要；`evaluation-verify-signature` 必须由调用者提供独立可信公钥，并验证原始字节、publication 身份、公钥指纹及全部已签元数据。签名/verification 各有严格 JSON schema，篡改 publication、release、signer 或换公钥均失败。该能力没有声称可信时间、证书链、吊销或 GitHub 工作流身份；下一阶段可以接入 GitHub artifact attestation/Sigstore OIDC 的验证侧，要求校验 subject digest、repository、workflow ref 与 issuer，且私钥签名和平台 provenance 保持两个独立信任域。
 
+第三十二切片实现 GitHub artifact attestation 验证侧：`evaluation-verify-provenance` 要求调用者重复 publication SHA-256，并以 exact repository、signer workflow、source commit/ref、GitHub Actions OIDC issuer、SLSA v1 predicate、SHA-256 subject 和 hosted runner 策略调用官方 `gh` verifier。成功后再次解析 statement subject 摘要；在线模式从 API 取证明，离线模式强制 bundle 与 out-of-band trusted root 成对出现。不可覆盖回执只保存策略与摘要，不保存 token、路径、证书或 predicate；Ed25519 人工授权继续作为独立信任域。下一阶段应增加受保护的 tag/release workflow，在最小 `id-token: write` / `attestations: write` job 中对 publication 签发证明，再由无签发权限的独立 job 下载并用本命令验收。
+
+第三十三切片实现受保护 publication provenance workflow：只接受从 Git tag 手动调度，要求 publication 已跟踪于固定结果目录、内部 release 等于文件名、无符号链接且重复 SHA-256 匹配。受 `evaluation-publication` Environment 约束的 `attest` job 独占 OIDC/attestation 写权限并使用 commit-pinned 官方 action；独立 `verify` job 只有 read 权限，通过 artifact ID 下载同一字节，绑定 repository、signer workflow、tag commit/ref 后生成验证回执。工作流契约测试锁定触发器、最小权限和 action pin。下一阶段可在验证成功后创建不可覆盖 GitHub Release asset，并再次核对 release asset digest 与 attested subject，仍不得上传私有 suite 或原始模型证据。
+
 ## 8. 文档维护规则
 
 以后每轮迭代至少检查：

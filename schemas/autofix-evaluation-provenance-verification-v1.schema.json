@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zhanghl-learner/docker-ollama-autofix/blob/main/schemas/autofix-evaluation-provenance-verification-v1.schema.json",
+  "title": "AutoFix Evaluation GitHub Provenance Verification v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "version", "verified", "provider", "artifact_type",
+    "artifact_sha256", "publication_version", "release", "repository",
+    "signer_workflow", "source_digest", "source_ref", "oidc_issuer",
+    "predicate_type", "deny_self_hosted_runners", "verification_mode",
+    "bundle_sha256", "trusted_root_sha256", "attestation_count", "verifier"
+  ],
+  "properties": {
+    "schema": {"const": "autofix-evaluation-provenance-verification"},
+    "version": {"const": 1},
+    "verified": {"const": true},
+    "provider": {"const": "github"},
+    "artifact_type": {"const": "evaluation-publication"},
+    "artifact_sha256": {"$ref": "#/$defs/sha256"},
+    "publication_version": {"enum": [1, 2]},
+    "release": {"type": "string", "minLength": 1, "maxLength": 64},
+    "repository": {"type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+    "signer_workflow": {"type": "string", "pattern": "^[^/]+/[^/]+/\\.github/workflows/[^/]+\\.ya?ml$"},
+    "source_digest": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+    "source_ref": {"type": "string", "pattern": "^refs/(?:heads|tags)/.+$"},
+    "oidc_issuer": {"const": "https://token.actions.githubusercontent.com"},
+    "predicate_type": {"const": "https://slsa.dev/provenance/v1"},
+    "deny_self_hosted_runners": {"const": true},
+    "verification_mode": {"enum": ["online-api", "offline-bundle"]},
+    "bundle_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "trusted_root_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "attestation_count": {"type": "integer", "minimum": 1},
+    "verifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "output_sha256"],
+      "properties": {
+        "name": {"const": "gh"},
+        "version": {"type": "string", "minLength": 1, "maxLength": 200},
+        "output_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"verification_mode": {"const": "offline-bundle"}}},
+      "then": {
+        "properties": {
+          "bundle_sha256": {"$ref": "#/$defs/sha256"},
+          "trusted_root_sha256": {"$ref": "#/$defs/sha256"}
+        }
+      },
+      "else": {
+        "properties": {
+          "bundle_sha256": {"type": "null"},
+          "trusted_root_sha256": {"type": "null"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

@@ -168,3 +168,4 @@ jobs:
           autofix evaluation-publish --help
           autofix evaluation-sign --help
           autofix evaluation-verify-signature --help
+          autofix evaluation-verify-provenance --help

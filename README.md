@@ -21,6 +21,7 @@ The next development phase is **safe real-repository integration and evaluation 
 - [冻结评测基准与趋势比较](docs/BENCHMARKING_ZH.md) — provenance, exact corpus digests, comparable suite identities, and regression gates.
 - [真实模型评测审核与发布](docs/EVALUATION_PUBLICATION_ZH.md) — preview-first review, privacy-minimized attestations, and immutable versioned results.
 - [评测发布的 Ed25519 签名与验证](docs/EVALUATION_SIGNATURE_ZH.md) — detached signatures, explicit trusted-key verification, and precise identity/provenance limits.
+- [GitHub Artifact Attestation 来源验证](docs/EVALUATION_PROVENANCE_ZH.md) — exact repository/workflow/source/OIDC policy, online or offline verification, and immutable receipts.
 - [开发路线图与发布准备](docs/ROADMAP_ZH.md) — product positioning, maturity boundaries, milestone priorities, and definition of done.
 - [学习导读](docs/LEARNING_GUIDE_ZH.md) — a progressive mental model and study path for new maintainers.
 - [核心代码导读](docs/CORE_CODE_WALKTHROUGH_ZH.md) — the main call paths, data contracts, and module responsibilities.
@@ -44,6 +45,7 @@ flowchart LR
     CONTRACT[autofix-eval.yml] --> EVAL[Reproducible evaluation]
     EVAL --> PUBLICATION[Reviewed immutable publication]
     PUBLICATION --> SIGNATURE[Optional Ed25519 signature]
+    PUBLICATION --> PLATFORM[GitHub OIDC provenance verification]
     EVAL --> BUILD
     EVAL --> MODEL
     DETECT --> BUILD[Local or constrained Docker build]
@@ -94,6 +96,8 @@ The model proposes edits but never decides acceptance and never writes directly 
 - `autofix benchmark-verify PATH` verifies that every evaluation case is declared with provenance and an exact bounded source-tree digest before scoring. `autofix evaluation-trend CURRENT --baseline PREVIOUS` compares only suites with identical modes, case contracts, model digest/quantization, runner policy, and runtime identity, and can fail CI on directional quality regressions.
 - `autofix evaluation-publish SUITE --benchmark PATH ...` previews a privacy-minimized real-model attestation, revalidates the frozen corpus and host or pinned-container execution identity, and only writes an immutable versioned result after `--publish` repeats the reviewed suite SHA-256. It never publishes raw logs/source diffs or commits Git changes.
 - `autofix evaluation-sign PUBLICATION --private-key KEY --expected-publication-sha256 SHA --output SIGNATURE` creates non-overwriting, domain-separated Ed25519 evidence; `evaluation-verify-signature` succeeds only with an explicitly supplied trusted public key. A signed label is not treated as an external identity or GitHub provenance.
+- `autofix evaluation-verify-provenance PUBLICATION ...` delegates cryptographic artifact-attestation verification to GitHub CLI while requiring an exact repository, signer workflow, source digest/ref, GitHub OIDC issuer, SLSA v1 predicate, SHA-256 subject, and non-self-hosted runner. AutoFix rechecks the subject digest and can publish a path-free immutable receipt; it never creates or uploads attestations.
+- `.github/workflows/evaluation-publication-provenance.yml` is the only attestation issuer: a manually dispatched, tag-bound, environment-gated job receives OIDC/write permissions, while a separate read-only job downloads the exact artifact ID and verifies repository/workflow/tag provenance before retaining a receipt. Repository administrators must configure the `evaluation-publication` environment protection rules.
 - `autofix evaluate-suite [PATH]` recursively discovers evaluation manifests and runs deterministic baselines as one suite; add `--repair --model MODEL` to score isolated model repairs. Human mode shows live context/Ollama/verification progress and every verified diff. Repair suite JSON v6 preserves context quality metrics and adds exact Ollama digest/quantization plus suite-scoped host toolchains or an inspected `sha256:` Docker image ID and container toolchain evidence.
 - `autofix rollback REPORT --project PATH` reverses a recorded repair and first backs up the replaced files.
 - `autofix undo [PATH]` automatically reverses the latest successful repair that has not already been undone.
@@ -278,7 +282,7 @@ Evaluation is deliberately non-mutating. A baseline case passes only when its de
 
 ## Roadmap
 
-The evaluation contract now includes synthetic Python/Node.js cases plus commit-pinned Python and Go upstream extractions. Git worktree isolation, CI result contracts, baseline suite aggregation, isolated model-repair scoring, frozen provenance, and toolchain-bound trend comparison are implemented. The next slices add versioned real-model baselines and broader Rust/Java/C++ upstream cases. The detailed order and exit criteria are maintained in [docs/ROADMAP_ZH.md](docs/ROADMAP_ZH.md).
+The evaluation contract now includes synthetic Python/Node.js cases plus commit-pinned Python and Go upstream extractions. Git worktree isolation, CI result contracts, isolated model scoring, frozen provenance, versioned publications, independent Ed25519 authorization, strict GitHub artifact-attestation verification, and a least-privilege tag release workflow are implemented. The next slice can bind a GitHub Release asset to the already attested publication before broader Rust/Java/C++ corpus growth. The detailed order and exit criteria are maintained in [docs/ROADMAP_ZH.md](docs/ROADMAP_ZH.md).
 
 ## License
 

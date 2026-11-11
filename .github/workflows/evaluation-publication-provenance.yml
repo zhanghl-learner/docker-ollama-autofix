@@ -1,0 +1,198 @@
+name: Evaluation publication provenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      publication_path:
+        description: Committed benchmarks/evaluation-results/<benchmark>/<release>.json path
+        required: true
+        type: string
+      expected_sha256:
+        description: Independently reviewed SHA-256 of the publication bytes
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: evaluation-publication-provenance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  attest:
+    name: Attest reviewed publication
+    runs-on: ubuntu-latest
+    environment: evaluation-publication
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      publication_sha256: ${{ steps.stage.outputs.publication_sha256 }}
+      source_digest: ${{ steps.stage.outputs.source_digest }}
+      source_ref: ${{ steps.stage.outputs.source_ref }}
+
+    steps:
+      - name: Check out selected release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Stage exact reviewed publication
+        id: stage
+        shell: bash
+        env:
+          PUBLICATION_PATH: ${{ inputs.publication_path }}
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import shutil
+          import subprocess
+          from pathlib import Path
+
+          root = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          relative = Path(os.environ["PUBLICATION_PATH"])
+          expected = os.environ["EXPECTED_SHA256"].strip().lower()
+          source_ref = os.environ["GITHUB_REF"]
+          source_digest = os.environ["GITHUB_SHA"].lower()
+          safe_segment = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+          if not source_ref.startswith("refs/tags/"):
+              raise SystemExit("This workflow must be dispatched from a Git tag")
+          if re.fullmatch(r"[0-9a-f]{64}", expected) is None:
+              raise SystemExit("expected_sha256 must contain exactly 64 hexadecimal digits")
+          if relative.is_absolute() or len(relative.parts) != 4:
+              raise SystemExit("publication_path must have exactly four relative path components")
+          if relative.parts[:2] != ("benchmarks", "evaluation-results"):
+              raise SystemExit("publication_path must be below benchmarks/evaluation-results")
+          if safe_segment.fullmatch(relative.parts[2]) is None:
+              raise SystemExit("benchmark path segment is unsafe")
+          if relative.suffix != ".json" or safe_segment.fullmatch(relative.stem) is None:
+              raise SystemExit("publication filename must be a safe <release>.json value")
+
+          current = root
+          for part in relative.parts:
+              current = current / part
+              if current.is_symlink():
+                  raise SystemExit("publication path cannot contain symbolic links")
+          publication = current.resolve()
+          if not publication.is_file() or root not in publication.parents:
+              raise SystemExit("publication must resolve to a regular repository file")
+          subprocess.run(
+              ["git", "ls-files", "--error-unmatch", "--", relative.as_posix()],
+              cwd=root,
+              check=True,
+              stdout=subprocess.DEVNULL,
+          )
+          if subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip().lower() != source_digest:
+              raise SystemExit("checked out HEAD does not match the workflow source digest")
+
+          raw = publication.read_bytes()
+          if not raw or len(raw) > 4 * 1024 * 1024:
+              raise SystemExit("publication must contain between 1 byte and 4 MiB")
+          actual = hashlib.sha256(raw).hexdigest()
+          if actual != expected:
+              raise SystemExit("reviewed SHA-256 does not match publication bytes")
+          try:
+              payload = json.loads(raw.decode("utf-8"))
+          except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+              raise SystemExit("publication must be valid UTF-8 JSON") from exc
+          if (
+              not isinstance(payload, dict)
+              or payload.get("schema") != "autofix-evaluation-publication"
+              or payload.get("version") not in {1, 2}
+              or payload.get("release") != relative.stem
+          ):
+              raise SystemExit("publication identity must match its release filename")
+
+          staged = root / "staged" / "publication.json"
+          staged.parent.mkdir(mode=0o700)
+          shutil.copyfile(publication, staged)
+          if hashlib.sha256(staged.read_bytes()).hexdigest() != actual:
+              raise SystemExit("staged publication digest changed unexpectedly")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"publication_sha256={actual}\n")
+              output.write(f"source_digest={source_digest}\n")
+              output.write(f"source_ref={source_ref}\n")
+          PY
+
+      - name: Create GitHub build-provenance attestation
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: staged/publication.json
+
+      - name: Upload exact attested publication
+        id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: evaluation-publication-${{ github.run_id }}
+          path: staged/publication.json
+          if-no-files-found: error
+          retention-days: 90
+
+  verify:
+    name: Independently verify publication provenance
+    needs: attest
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+
+    steps:
+      - name: Check out verifier source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Download attested publication by artifact ID
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.attest.outputs.artifact_id }}
+          path: verified
+
+      - name: Install AutoFix verifier
+        run: python -m pip install .
+
+      - name: Verify GitHub CLI attestation support
+        run: gh attestation verify --help >/dev/null
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Verify exact publication provenance policy
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLICATION_SHA256: ${{ needs.attest.outputs.publication_sha256 }}
+          SOURCE_DIGEST: ${{ needs.attest.outputs.source_digest }}
+          SOURCE_REF: ${{ needs.attest.outputs.source_ref }}
+        run: |
+          set -euo pipefail
+          autofix evaluation-verify-provenance verified/publication.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/evaluation-publication-provenance.yml" \
+            --source-digest "$SOURCE_DIGEST" \
+            --source-ref "$SOURCE_REF" \
+            --expected-publication-sha256 "$PUBLICATION_SHA256" \
+            --output provenance-verification.json \
+            --json
+
+      - name: Upload verified provenance receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: evaluation-provenance-verification-${{ github.run_id }}
+          path: provenance-verification.json
+          if-no-files-found: error
+          retention-days: 90

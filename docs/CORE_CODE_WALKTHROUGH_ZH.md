@@ -37,6 +37,10 @@ cli.py
 
 `evaluation_signature.py` 对 publication 原始字节计算 SHA-256，再把摘要、publication 身份、release、时间、signer 标签和公钥指纹编码为排序且无多余空白的声明；Ed25519 对带域分离前缀的声明签名。验证端不从签名文件接受公钥，必须由调用者单独传入可信 PEM 公钥，并同时复核指纹、声明签名和 publication 原始字节。签名文件使用共享不可覆盖 JSON 发布原语，私钥内容不进入 stdout、日志或证据。
 
+`evaluation_provenance.py` 不自行实现 Sigstore。它把 exact repository/workflow/source/ref/issuer/predicate 策略转换成固定 `gh attestation verify` argv，由 GitHub CLI 验证证书链和透明日志，再解析 JSON 对 publication SHA-256 subject 做防御性二次核对。离线 bundle 必须与 trusted root 成对出现；输出回执不含路径和原始证明。这样可以跟随官方 verifier 更新密码学实现，同时让 AutoFix 的业务策略、退出码和审计 schema 保持可测试。
+
+`.github/workflows/evaluation-publication-provenance.yml` 把签发权限限制在 tag-bound `attest` job；read-only `verify` job 只通过前一 job 的 artifact ID 取文件，并调用上述模块。`test_evaluation_release_workflow.py` 不是替代 GitHub 端密码学集成，而是锁定触发方式、job 权限分离、完整 action commit pin 和 AutoFix 的全部策略参数，避免后续 YAML 维护静默放宽信任边界。
+
 `OllamaClient.model_identity()` 从本机 `/api/tags` 精确解析已选模型，要求 64 位内容 digest，并保留 GGUF 格式、family、parameter size 与 quantization level。`evaluate_suite()` 把这些字段和 Python/系统/架构身份写入 repair suite v6，并按有效用例语言采集 Node、Go、Rust、Java 或 C/C++ 工具链。local 使用 PATH 解析后的固定 argv；Docker 先由 `resolve_docker_image_identity()` 把标签解析为 image ID，再由 `collect_docker_toolchain_identity()` 在断网、只读、降权容器中探测，同一 ID 随后用于真实构建。两者均无 shell、限时、不安装依赖；模型请求和修复判定仍使用原来的 schema 与隔离状态机。
 
 同一模块的 `generate_property_candidate()` 调用 Ollama 的独立候选 schema，只把通过 AST/副作用边界的源码保存为 `.autofix` 审核工件。生成和执行是两个命令，模型没有直接调用 runner 或写项目测试树的能力。
@@ -144,5 +148,7 @@ CLI 负责参数、用户输出和退出码，不应承载核心修复算法。
 - `test_plans.py`：plan 兼容与 provenance；
 - `test_repository.py`：脏工作区、commit 精确范围；
 - `test_artifacts.py`：patch 确定性和不可覆盖。
+- `test_evaluation_provenance.py`：GitHub 策略 argv、subject 二次核对、在线/离线信任材料和失败不落盘。
+- `test_evaluation_release_workflow.py`：tag 触发、environment、签发/验证权限隔离、action commit pin 和 artifact ID 传递。
 
 看到一个安全判断时，寻找对应负向测试。若没有测试，后续修改应优先补上。

@@ -393,6 +393,7 @@ autofix evaluate-suite examples\complex-validation `
 | `autofix evaluation-publish SUITE --benchmark PATH ...` | 预览审核后的公开最小证明；加 `--publish` 和预览摘要才不可覆盖发布 | 仅显式发布时写结果目录 |
 | `autofix evaluation-sign PUBLICATION --private-key KEY ...` | 用明确复核的 publication SHA-256 创建不可覆盖 Ed25519 签名 | 只写指定签名文件；不修改 publication/Git |
 | `autofix evaluation-verify-signature PUBLICATION SIGNATURE --public-key KEY` | 使用独立可信公钥验证 publication 精确字节和已签元数据 | 否 |
+| `autofix evaluation-verify-provenance PUBLICATION --repo OWNER/REPO ...` | 以精确 GitHub workflow/source/OIDC 策略验证 publication 的 artifact attestation | 否；可选写不可覆盖回执 |
 | `autofix benchmark-verify PATH` | 验证评测清单覆盖、来源元数据和源码树摘要 | 否；可选写不可覆盖 JSON 回执 |
 | `autofix evaluation-trend CURRENT --baseline PREVIOUS` | 仅在 mode 和 case contract 完全相同时比较指标 | 否 |
 | `autofix evaluation-trend CURRENT --baseline PREVIOUS --fail-on-regression` | 方向性质量指标退化时返回 1 | 否；适合 CI 门禁 |
@@ -421,11 +422,15 @@ autofix evaluate-suite --help
 autofix evaluation-publish --help
 autofix evaluation-sign --help
 autofix evaluation-verify-signature --help
+autofix evaluation-verify-provenance --help
 autofix benchmark-verify --help
 autofix evaluation-trend --help
 autofix ci-check --help
 autofix bundle --help
 ```
+
+publication 的在线/离线 GitHub artifact attestation 验证、精确 workflow/source 策略和信任边界见 [GitHub Artifact Attestation 来源验证](EVALUATION_PROVENANCE_ZH.md)。
+其中也包含内置 tag 发布工作流的准备步骤；必须先在 GitHub 配置受保护的 `evaluation-publication` Environment，workflow 文件中的名称不会自动产生 required reviewers。
 
 静态分析的声明规则、JSON v1 契约、退出状态以及如何通过 `--step` 加入 repair 验收矩阵，见[静态分析使用与安全边界](STATIC_ANALYSIS_ZH.md)。
 

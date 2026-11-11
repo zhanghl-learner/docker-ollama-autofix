@@ -65,6 +65,10 @@ from autofix.evaluation_signature import (
     sign_evaluation_publication,
     verify_evaluation_signature,
 )
+from autofix.evaluation_provenance import (
+    EvaluationProvenanceError,
+    verify_github_evaluation_provenance,
+)
 from autofix.evaluation_suite import (
     EvaluationSuiteError,
     EvaluationSuiteProgressEvent,
@@ -2096,6 +2100,107 @@ def evaluation_verify_signature_command(
         table.add_row("publication SHA-256", result.publication_sha256)
         table.add_row("public key SHA-256", result.public_key_sha256)
         console.print(table)
+
+
+@app.command("evaluation-verify-provenance")
+def evaluation_verify_provenance_command(
+    publication: Path = typer.Argument(
+        ..., exists=True, dir_okay=False, resolve_path=True
+    ),
+    repository: str = typer.Option(
+        ..., "--repo", help="Exact GitHub owner/repository identity."
+    ),
+    signer_workflow: str = typer.Option(
+        ...,
+        "--signer-workflow",
+        help="Exact owner/repository/.github/workflows/name.yml signer identity.",
+    ),
+    source_digest: str = typer.Option(
+        ..., "--source-digest", help="Expected source commit digest."
+    ),
+    source_ref: str = typer.Option(
+        ..., "--source-ref", help="Expected full refs/heads/... or refs/tags/... ref."
+    ),
+    expected_publication_sha256: str = typer.Option(
+        ...,
+        "--expected-publication-sha256",
+        help="Independently reviewed SHA-256 of the exact publication bytes.",
+    ),
+    bundle: Path | None = typer.Option(
+        None,
+        "--bundle",
+        exists=True,
+        dir_okay=False,
+        resolve_path=True,
+        help="Downloaded GitHub attestation bundle for offline verification.",
+    ),
+    trusted_root: Path | None = typer.Option(
+        None,
+        "--trusted-root",
+        exists=True,
+        dir_okay=False,
+        resolve_path=True,
+        help="Out-of-band trusted_root.jsonl; required with --bundle.",
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        dir_okay=False,
+        resolve_path=True,
+        help="Optional non-existing immutable verification receipt path.",
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print machine-readable verification evidence."
+    ),
+) -> None:
+    """Verify GitHub OIDC provenance for exact evaluation publication bytes."""
+
+    try:
+        result = verify_github_evaluation_provenance(
+            publication,
+            repository=repository,
+            signer_workflow=signer_workflow,
+            source_digest=source_digest,
+            source_ref=source_ref,
+            expected_publication_sha256=expected_publication_sha256,
+            bundle_path=bundle,
+            trusted_root_path=trusted_root,
+            output_path=output,
+        )
+    except (OSError, EvaluationProvenanceError) as exc:
+        if json_output:
+            typer.echo(
+                json.dumps(
+                    {
+                        "schema": "autofix-evaluation-provenance-verification-error",
+                        "version": 1,
+                        "verified": False,
+                        "error": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            console.print(f"[red]GitHub provenance verification failed: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    if json_output:
+        _json(result.to_dict())
+    else:
+        table = Table(title="Evaluation GitHub provenance verification")
+        table.add_column("Field")
+        table.add_column("Value")
+        table.add_row("verified", "true")
+        table.add_row("release", result.release)
+        table.add_row("publication SHA-256", result.artifact_sha256)
+        table.add_row("repository", result.repository)
+        table.add_row("signer workflow", result.signer_workflow)
+        table.add_row("source digest", result.source_digest)
+        table.add_row("source ref", result.source_ref)
+        table.add_row("mode", result.verification_mode)
+        table.add_row("attestations", str(result.attestation_count))
+        console.print(table)
+        if output is not None:
+            console.print(f"[green]Published immutable verification receipt: {output}[/green]")
 
 
 @app.command("evaluation-trend")

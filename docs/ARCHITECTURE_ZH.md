@@ -49,6 +49,7 @@ flowchart TB
         EVAL_SUITE[批量 baseline / repair 聚合<br/>evaluation_suite.py]
         PUBLICATION[审核发布<br/>evaluation_publication.py]
         SIGNATURE[Ed25519 签名验证<br/>evaluation_signature.py]
+        PROVENANCE[GitHub OIDC 来源验证<br/>evaluation_provenance.py]
     end
 
     subgraph Intelligence[模型边界]
@@ -87,6 +88,7 @@ flowchart TB
     EVAL_SUITE --> EVALUATION_SUITES
     EVALUATION_SUITES --> PUBLICATION
     PUBLICATION --> SIGNATURE
+    PUBLICATION --> PROVENANCE
     GIT --> REPAIR
     REPAIR --> WORKTREE
     WORKTREE --> LOCAL
@@ -450,6 +452,10 @@ repair suite JSON v3 把这些记录聚合为检索质量与成本指标；v4 �
 `evaluation_publication.py` 是原始 repair suite 与公开仓库之间的独立降权边界。它只读取 suite 和冻结 fixture：重新计算 manifest/case/tree 摘要，验证模型 digest、宿主或容器工具链、Docker image ID、proposal 与计数，再构造不含根路径、日志、模型输出和 diff 的 publication v2。默认 preview 不写盘；显式发布必须重复 suite SHA-256，并复用不可覆盖的原子 JSON 发布原语。发布文件绑定私有 suite，但不把 SHA 描述为签名，也不自动 commit/push。历史 v5 local suite 仍可发布；v5 `container-unresolved` 继续拒绝。
 
 `evaluation_signature.py` 是 publication 之后的可选授权层。签名命令要求调用者重复 publication SHA-256，并只接受 PEM Ed25519 私钥；签名覆盖规范化声明中的摘要、schema/version、release、签署时间、signer 标签和公钥 DER 指纹。验证命令必须从签名文件之外接收可信公钥，先复核 publication 原始字节摘要和身份，再验证指纹及 Ed25519 签名。该层不读取原始 suite、不重新评分，也不把 signer 标签、本机时间或 Git SHA 提升为外部身份、可信时间戳或 CI provenance。
+
+`evaluation_provenance.py` 是与 Ed25519 平行的平台来源验证层。它先验证 publication 结构和调用者重复输入的原始字节 SHA-256，再以无 shell argv 调用 `gh attestation verify`。策略固定要求 exact repository、signer workflow、source digest/ref、GitHub Actions OIDC issuer、SLSA provenance v1、SHA-256 subject 和非 self-hosted runner；`gh` 成功后仍从 JSON statement 二次核对 subject digest。在线模式通过 GitHub API 获取 bundle；离线模式必须同时提供 bundle 与 out-of-band trusted root。成功回执只保留策略、信任材料摘要、`gh` 版本和输出摘要，不复制证书、predicate、token 或本机路径。普通 CLI 只验证，不签发、不上传，也不把 workflow-controlled predicate 当作独立可信事实。
+
+专用 `evaluation-publication-provenance.yml` 是唯一签发入口。`attest` job 要求 Git tag、已跟踪 publication、安全固定路径、内部 release 与文件名一致、用户重复摘要与 staged bytes 一致，并由 `evaluation-publication` environment 承担仓库端人工审批；只有该 job 具备 OIDC/attestation 写权限。`verify` job 通过不可猜测的 artifact ID 消费同一文件，只有 read 权限，并把 `github.sha` / `github.ref` 作为 source digest/ref 交给 AutoFix。第三方 Actions 固定完整 commit。由此把“能签发”与“判定刚签发的 artifact 是否满足发布策略”分为两个权限域。
 
 上下文收集入口会先将项目根路径规范化，再处理目录遍历结果和构建输出中的文件路径。这用于统一 Windows 8.3 短路径（例如 `RUNNER~1`）与长路径所指向的同一目录；随后仍以解析后的候选路径执行根目录包含检查，因此路径别名兼容不会放宽项目边界或允许读取项目外文件。
 
@@ -921,6 +927,7 @@ autofix run . --docker
 - Git worktree 只包含 HEAD 已跟踪内容，不携带被忽略的依赖/生成状态；非 Git 临时副本还会排除缓存、构建目录、依赖目录和符号链接；
 - rollback 依赖当前内容精确匹配已应用 diff；
 - Windows 离线 bootstrap 当前锁定 Python 3.11 wheelhouse。
+- GitHub provenance 当前只支持 GitHub.com、SLSA v1 和 publication 文件；专用 tag workflow 能签发并独立验证，但尚未创建 GitHub Release asset，也不支持 GHES、自定义 issuer 或 OCI 验证入口。
 
 下一阶段定义为“真实仓库安全接入与规模化评测”。优先级按风险依赖排序，而不是按功能数量排序：
 

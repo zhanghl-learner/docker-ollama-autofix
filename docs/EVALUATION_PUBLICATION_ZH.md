@@ -75,4 +75,4 @@ benchmarks/evaluation-results/<benchmark-name>/<release>.json
 
 publication 是“结构校验 + 内容摘要 + 人工声明”，不是数字签名，也无法证明审核人真实身份。能够同时篡改原始 suite 和发布文件的人仍可伪造证据。因此公开结论应同时依赖 Git 历史、CI artifact 保留策略和代码审查；未来可增加签名或构建来源证明，但不会用一个自算 SHA 冒充可信签名。
 
-需要对 publication 精确字节和审核声明增加公钥认证时，使用[评测发布的 Ed25519 签名与验证](EVALUATION_SIGNATURE_ZH.md)。签名仍不自动证明 GitHub 工作流身份或可信时间。
+需要对 publication 精确字节和审核声明增加公钥认证时，使用[评测发布的 Ed25519 签名与验证](EVALUATION_SIGNATURE_ZH.md)。需要证明 GitHub Actions 构建来源时，使用独立的[GitHub Artifact Attestation 来源验证](EVALUATION_PROVENANCE_ZH.md)。两者信任根不同：本地公钥授权不能证明工作流身份，GitHub OIDC provenance 也不能证明人工审核质量。

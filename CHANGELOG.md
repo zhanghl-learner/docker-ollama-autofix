@@ -36,6 +36,10 @@
 - publication 升级为 JSON v2：除历史 v5 local 结果外，允许重新认证并发布具备 image ID 与容器工具链证据的 v6 Docker 结果；旧 `container-unresolved` 继续拒绝。
 - 新增 `evaluation-sign` 与 `evaluation-verify-signature`：使用 Ed25519 对 publication 摘要、身份、release、签署时间、signer 标签和公钥指纹组成的域分离规范声明签名；验证必须显式提供可信公钥。
 - 新增签名与 verification JSON schema v1 及密钥管理指南；publication/已签元数据篡改、错误公钥、摘要漂移和覆盖输出均有真实密钥回归。
+- 新增 `evaluation-verify-provenance` 与 GitHub provenance verification schema v1：以精确 repository、signer workflow、source digest/ref、GitHub OIDC issuer、SLSA v1 subject 和 hosted-runner 策略验证 publication artifact attestation。
+- GitHub provenance 支持在线 API 与离线 bundle；离线必须同时提供 out-of-band trusted root，成功后再次核对 publication subject SHA-256，并可发布不含路径/证书/predicate 的不可覆盖回执。
+- 新增 tag-bound `evaluation-publication-provenance.yml`：environment-gated 签发 job 独占 OIDC/attestation 写权限，read-only 验证 job 按 artifact ID 下载并绑定 repository/workflow/tag commit/ref 后生成回执。
+- 发布工作流中的 checkout、Python、attestation 和 artifact actions 全部固定完整 commit；新增契约测试阻止触发器、权限分离、路径约束或验证参数静默放宽。
 - 新增严格的 repair suite JSON schema v3；聚合 required-path context recall、Top-5 recall、平均命中排名、累计文件/字符、截断率和 fallback 比例，v1 baseline 与历史 v2 repair schema 保留。
 - 终端和 suite Markdown 展示上下文召回、排名与发送规模，使“上下文未命中”和“模型生成失败”可以分别诊断。
 - 新增可审计的 `SourceContext` / `ContextSelection`：从构建输出直接路径出发，有界遍历 Python（含包重导出和唯一模块后缀的 `src/` 布局）、JavaScript/TypeScript 与 C/C++ 本地依赖，并记录选择原因、测试属性、字符数和截断状态。

@@ -59,5 +59,5 @@ autofix evaluation-verify-signature $publication `
 - `signer` 是被签名的显示标签，但标签本身不建立现实身份；可信身份来自调用者选择的公钥及其分发/轮换制度。
 - `signed_at` 被签名但由本机时钟生成，不是可信时间戳服务证明。
 - 签名证明持有私钥的一方批准了这些精确字节，不证明模型正确、审核充分或 CI 没有被攻破。
-- 当前没有证书链、吊销列表、硬件密钥、GitHub OIDC 或 Sigstore transparency log。
-- 后续 CI provenance 必须验证平台签发的工作流身份和 artifact subject，不能把本签名、Git commit SHA 或普通文件摘要重新命名为供应链证明。
+- 本 Ed25519 协议没有证书链、吊销列表、硬件密钥、GitHub OIDC 或 Sigstore transparency log。
+- 平台 CI provenance 已由独立的[GitHub Artifact Attestation 来源验证](EVALUATION_PROVENANCE_ZH.md)提供验证侧闭环；它不会把本签名、Git commit SHA 或普通文件摘要重新命名为供应链证明，也不会取代本地审核授权。
